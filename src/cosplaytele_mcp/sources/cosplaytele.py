@@ -50,7 +50,11 @@ class CosplayTeleSource(GallerySource):
     async def popular(
         self, page: int, category: str | None = None, period: str | None = None
     ) -> ListingPage:
-        if category:
+        if category and category.strip().lower() != "all":
+            if period:
+                raise SourceError(
+                    "CosplayTele cannot combine a category listing with a popular period"
+                )
             return await self.search("", page, category, exclude_ai=False)
         window = (period or "last7days").strip()
         if window not in POPULAR_PERIODS:
@@ -62,7 +66,7 @@ class CosplayTeleSource(GallerySource):
             f"{self.base_url}/wp-json/wordpress-popular-posts/v1/popular-posts"
             f"?offset={offset}&limit={PAGE_SIZE}&range={window}"
             "&embed=true&_embed=wp:featuredmedia,wp:term"
-            "&_fields=title,link,date,content,_embedded,_links.wp:featuredmedia"
+            "&_fields=title,link,date,_embedded,_links"
         )
         payload = await self.http.get_json(url, referer=f"{self.base_url}/")
         if not isinstance(payload, list):
@@ -76,7 +80,7 @@ class CosplayTeleSource(GallerySource):
         )
 
     async def latest(self, page: int, category: str | None = None) -> ListingPage:
-        if category:
+        if category and category.strip().lower() != "all":
             return await self.search("", page, category, exclude_ai=False)
         return await self._wp_posts(page)
 
@@ -135,7 +139,7 @@ class CosplayTeleSource(GallerySource):
         payload = await self.http.get_json(
             f"{self.base_url}/wp-json/contextual-related-posts/v1/posts",
             referer=f"{self.base_url}/",
-            params={"id": str(post_id), "limit": str(PAGE_SIZE * page)},
+            params={"id": str(post_id), "limit": str(PAGE_SIZE * page + 1)},
         )
         related_posts = (
             [entry for entry in payload if isinstance(entry, dict)]
@@ -185,6 +189,15 @@ class CosplayTeleSource(GallerySource):
             referer=f"{self.base_url}/",
             search=search or None,
             extra=extra,
+            fields=(
+                "id",
+                "link",
+                "title",
+                "date",
+                "categories",
+                "tags",
+                "jetpack_featured_media_url",
+            ),
         )
         listing = listing_from_posts(self.id, page, posts, has_next)
         items = [

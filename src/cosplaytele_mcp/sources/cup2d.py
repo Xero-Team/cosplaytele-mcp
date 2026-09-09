@@ -34,6 +34,8 @@ class Cup2DSource(GallerySource):
     async def search(
         self, query: str, page: int, category: str | None, exclude_ai: bool = True
     ) -> ListingPage:
+        if category:
+            raise SourceError("Cup2D does not support category filters")
         extra: dict[str, str] = {}
         if exclude_ai:
             await self._exclude_ai(extra)
@@ -66,7 +68,11 @@ class Cup2DSource(GallerySource):
             for node in document.css("a[rel=tag], .post-tags a, .entry-tags a")
             if text_of(node)
         ]
-        content = document.css_first("article, .entry-content, .post-content")
+        content = (
+            document.css_first(".entry-content")
+            or document.css_first(".post-content")
+            or document.css_first("article")
+        )
         html = content.html if content is not None else document.html or ""
         images = images_from_html(html, self.base_url)
         if not images:

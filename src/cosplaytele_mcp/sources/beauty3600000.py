@@ -13,6 +13,7 @@ class Beauty3600000Source(GallerySource):
     name = "3600000 Beauty"
     base_url = "https://3600000.xyz"
     supports_latest = False
+    popular_kind = "archive"
     category_names = ("cosplay",)
 
     async def popular(
@@ -24,9 +25,15 @@ class Beauty3600000Source(GallerySource):
     async def search(
         self, query: str, page: int, category: str | None, exclude_ai: bool = True
     ) -> ListingPage:
+        if category and category != "cosplay":
+            raise SourceError(f"Unknown 3600000 Beauty category {category!r}")
         if not query.strip():
             return await self.popular(page)
-        path = f"/page/{page}/" if page > 1 else "/"
+        path = (
+            f"/category/cosplay/page/{page}/"
+            if category
+            else (f"/page/{page}/" if page > 1 else "/")
+        )
         url = f"{self.base_url}{path}?{urlencode({'s': query.strip()})}"
         return await self._listing(url, page)
 

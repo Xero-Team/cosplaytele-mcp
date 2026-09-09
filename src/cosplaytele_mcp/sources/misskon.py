@@ -25,18 +25,40 @@ class MissKonSource(GallerySource):
         )
 
     async def latest(self, page: int, category: str | None = None) -> ListingPage:
-        slug = slugify(category) if category else "cosplay"
-        return await self._wp_or_tag(slug, page)
+        if not category:
+            return await self._category_posts("cosplay", page)
+        return await self._category_posts(category, page)
 
     async def search(
         self, query: str, page: int, category: str | None, exclude_ai: bool = True
     ) -> ListingPage:
         if query.strip():
             extra: dict[str, str] = {}
+            if category:
+                category_id = await self._category_id(category)
+                extra["categories"] = str(category_id)
             if exclude_ai:
                 await self._exclude_ai(extra)
             return await self._wp_posts(page, search=query.strip(), extra=extra)
         return await self.latest(page, category)
+
+    async def _category_posts(self, category: str, page: int) -> ListingPage:
+        return await self._wp_posts(
+            page, extra={"categories": str(await self._category_id(category))}
+        )
+
+    async def _category_id(self, category: str) -> int:
+        from cosplaytele_mcp.wordpress import fetch_wp_term_id
+
+        category_id = await fetch_wp_term_id(
+            self.http,
+            f"{self.base_url}/wp-json/wp/v2/categories",
+            referer=f"{self.base_url}/",
+            term=category,
+        )
+        if category_id is None:
+            raise SourceError(f"MissKon category slug not found: {category}")
+        return category_id
 
     async def by_tag(self, tag: str, page: int, exclude_ai: bool = True) -> ListingPage:
         slug = slugify(tag)

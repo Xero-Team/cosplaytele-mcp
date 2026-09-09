@@ -14,6 +14,7 @@ class FoamGirlSource(GallerySource):
     name = "FoamGirl"
     base_url = "https://foamgirl.net"
     supports_latest = False
+    popular_kind = "archive"
     category_names = ("cosplay",)
 
     async def popular(
@@ -25,9 +26,12 @@ class FoamGirlSource(GallerySource):
     async def search(
         self, query: str, page: int, category: str | None, exclude_ai: bool = True
     ) -> ListingPage:
+        if category and category != "cosplay":
+            raise SourceError(f"Unknown FoamGirl category {category!r}")
         if not query.strip():
-            return await self.popular(page)
-        url = f"{self.base_url}/page/{page}/?{urlencode({'post_type': 'post', 's': query.strip()})}"
+            return await self.popular(page, category)
+        prefix = f"/cosplay/page/{page}" if category else f"/page/{page}/"
+        url = f"{self.base_url}{prefix}?{urlencode({'post_type': 'post', 's': query.strip()})}"
         return await self._listing(url, page)
 
     async def by_tag(self, tag: str, page: int, exclude_ai: bool = True) -> ListingPage:
@@ -62,21 +66,30 @@ class FoamGirlSource(GallerySource):
                 has_more=True,
             )
         images: list[str] = []
+        seen_images: set[str] = set()
         page_url = url
+        visited_pages: set[str] = set()
         stopped = False
         for _ in range(40):
-            images.extend(self._page_images(document))
+            visited_pages.add(page_url)
+            for image in self._page_images(document):
+                if image not in seen_images:
+                    seen_images.add(image)
+                    images.append(image)
             if budget is not None and len(images) >= budget:
                 next_probe = document.css_first(".page-numbers[title='Next page']")
                 stopped = attr(next_probe, "href") is not None
                 break
             next_link = document.css_first(".page-numbers[title='Next page']")
             href = abs_url(self.base_url, attr(next_link, "href")) if next_link else None
-            if not href or href == page_url or "_" not in href.rsplit("/", 1)[-1]:
+            if not href or href in visited_pages or "_" not in href.rsplit("/", 1)[-1]:
                 break
             page_url = href
             document = await self.http.get_html(page_url, referer=url)
-        images = list(dict.fromkeys(images))
+        else:
+            stopped = (
+                attr(document.css_first(".page-numbers[title='Next page']"), "href") is not None
+            )
         if not images:
             raise SourceError(f"FoamGirl gallery has no images: {url}")
         return self.make_gallery(

@@ -33,7 +33,7 @@ class HentaiCosplaySource(GallerySource):
     id = "hentaicosplay"
     name = "Hentai Cosplay"
     base_url = "https://hentai-cosplay-xxx.com"
-    category_names = tuple(RANKINGS)
+    ranking_kinds = tuple(RANKINGS)
 
     async def popular(
         self, page: int, category: str | None = None, period: str | None = None
@@ -50,6 +50,10 @@ class HentaiCosplaySource(GallerySource):
     async def search(
         self, query: str, page: int, category: str | None, exclude_ai: bool = True
     ) -> ListingPage:
+        if category and query.strip():
+            raise SourceError(
+                "Hentai Cosplay cannot combine keyword search with a category/ranking filter"
+            )
         if query:
             keyword = quote(query.strip().replace(" ", "+"), safe="+")
             return await self._parse_listing(

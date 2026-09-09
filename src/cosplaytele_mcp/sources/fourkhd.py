@@ -30,6 +30,7 @@ class FourKHDSource(GallerySource):
     id = "fourkhd"
     name = "4KHD"
     base_url = "https://www.4khd.com"
+    popular_kind = "archive"
 
     def _api(self) -> str:
         return f"{self.base_url}/index.php"
@@ -58,6 +59,8 @@ class FourKHDSource(GallerySource):
     async def search(
         self, query: str, page: int, category: str | None, exclude_ai: bool = True
     ) -> ListingPage:
+        if category:
+            raise SourceError("4KHD does not support category filters")
         extra = {"rest_route": "/wp/v2/posts", "_embed": "1", "orderby": "date"}
         return await self._posts(page, search=query, extra=extra)
 

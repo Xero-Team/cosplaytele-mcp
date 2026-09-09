@@ -7,8 +7,9 @@ from typing import Any
 from selectolax.parser import HTMLParser
 
 from cosplaytele_mcp.htmlutil import abs_url, img_src, looks_like_video, path_of, slugify
-from cosplaytele_mcp.http import Http
+from cosplaytele_mcp.http import USE_CLIENT_TIMEOUT, Http
 from cosplaytele_mcp.models import ListingItem, ListingPage, SourceId
+from cosplaytele_mcp.sources.base import SourceError
 
 PAGE_SIZE = 20
 TAG_RE = re.compile(r"<[^>]+>")
@@ -137,8 +138,9 @@ async def fetch_wp_posts(
     referer: str,
     search: str | None = None,
     extra: dict[str, str] | None = None,
-    timeout: float | None = None,
+    timeout: float | object | None = USE_CLIENT_TIMEOUT,
     embed: bool = True,
+    fields: tuple[str, ...] | None = None,
 ) -> tuple[list[dict[str, Any]], bool]:
     params: dict[str, Any] = {
         "page": str(page),
@@ -146,6 +148,9 @@ async def fetch_wp_posts(
     }
     if embed:
         params["_embed"] = "wp:featuredmedia,wp:term"
+    if fields:
+        # WordPress requires these fields to retain data populated by _embed.
+        params["_fields"] = ",".join((*fields, "_links", "_embedded"))
     if extra:
         params.update(extra)
     if search and search.strip():
@@ -154,10 +159,11 @@ async def fetch_wp_posts(
     payload = response.json()
     if isinstance(payload, dict):
         if payload.get("code"):
-            return [], False
+            message = payload.get("message") or payload["code"]
+            raise SourceError(f"WordPress API error: {message}")
         payload = [payload]
     if not isinstance(payload, list):
-        return [], False
+        raise SourceError("WordPress posts API returned unexpected JSON")
     posts = [entry for entry in payload if isinstance(entry, dict)]
     total_pages = int(response.headers.get("x-wp-totalpages") or 0)
     has_next = page < total_pages if total_pages else len(posts) >= PAGE_SIZE

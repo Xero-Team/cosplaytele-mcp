@@ -4,7 +4,15 @@ from urllib.parse import quote, urlencode
 
 from selectolax.parser import HTMLParser
 
-from cosplaytele_mcp.htmlutil import abs_url, attr, img_src, path_of, slugify, text_of
+from cosplaytele_mcp.htmlutil import (
+    abs_url,
+    attr,
+    img_src,
+    looks_like_video,
+    path_of,
+    slugify,
+    text_of,
+)
 from cosplaytele_mcp.models import Gallery, ListingItem, ListingPage
 from cosplaytele_mcp.sources.base import GallerySource, SourceError
 
@@ -21,6 +29,7 @@ class MitakuSource(GallerySource):
     name = "Mitaku"
     base_url = "https://mitaku.net"
     supports_latest = False
+    popular_kind = "archive"
     category_names = tuple(CATEGORIES)
 
     async def popular(
@@ -43,6 +52,14 @@ class MitakuSource(GallerySource):
         self, query: str, page: int, category: str | None, exclude_ai: bool = True
     ) -> ListingPage:
         if query:
+            if category:
+                slug = CATEGORIES.get(category.strip().lower())
+                if not slug:
+                    raise SourceError(
+                        f"Unknown Mitaku category {category!r}. Use one of: {', '.join(CATEGORIES)}"
+                    )
+                url = f"{self.base_url}/category/{slug}/page/{page}/?{urlencode({'s': query.strip()})}"
+                return await self._parse_listing(url, page)
             url = f"{self.base_url}/page/{page}/?{urlencode({'s': query.strip()})}"
             return await self._parse_listing(url, page)
         if category:
@@ -72,8 +89,10 @@ class MitakuSource(GallerySource):
             if text_of(node)
         ]
         images = self._images(document)
-        if not images:
-            raise SourceError(f"Mitaku gallery has no images (video-only posts have none): {url}")
+        html = article.html or ""
+        has_video = looks_like_video(title=title, html=html)
+        if not images and not has_video:
+            raise SourceError(f"Mitaku gallery has no images: {url}")
         return self.make_gallery(
             title=title,
             path=resolved,
@@ -82,6 +101,7 @@ class MitakuSource(GallerySource):
             offset=offset,
             limit=limit,
             tags=tags,
+            has_video=has_video,
         )
 
     async def _parse_listing(self, url: str, page: int) -> ListingPage:

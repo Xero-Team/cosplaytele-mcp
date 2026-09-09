@@ -26,6 +26,8 @@ class KiutakuSource(GallerySource):
     async def search(
         self, query: str, page: int, category: str | None, exclude_ai: bool = True
     ) -> ListingPage:
+        if category:
+            raise SourceError("Kiutaku does not support category filters")
         if not query.strip():
             return await self.latest(page)
         url = f"{self.base_url}/?{urlencode({'search': query.strip(), 'start': str(self._offset(page))})}"
@@ -60,8 +62,11 @@ class KiutakuSource(GallerySource):
             if href:
                 page_urls.append(href)
         images: list[str] = []
+        seen_images: set[str] = set()
         stopped = False
-        unique_pages = list(dict.fromkeys(page_urls))[:40]
+        all_pages = list(dict.fromkeys(page_urls))
+        unique_pages = all_pages[:40]
+        truncated = len(all_pages) > len(unique_pages)
         for index, page_url in enumerate(unique_pages):
             if budget is not None and len(images) >= budget:
                 stopped = True
@@ -69,12 +74,12 @@ class KiutakuSource(GallerySource):
             document = first if page_url == url else await self.http.get_html(page_url, referer=url)
             for img in document.css("div.article-fulltext img[src], div.article-fulltext img"):
                 src = img_src(img, self.base_url)
-                if src:
+                if src and src not in seen_images:
+                    seen_images.add(src)
                     images.append(src)
             if budget is not None and len(images) >= budget and index + 1 < len(unique_pages):
                 stopped = True
                 break
-        images = list(dict.fromkeys(images))
         if not images:
             raise SourceError(f"Kiutaku gallery has no images: {url}")
         return self.make_gallery(
@@ -84,8 +89,8 @@ class KiutakuSource(GallerySource):
             images=images,
             offset=offset,
             limit=limit,
-            complete=not stopped,
-            has_more=stopped,
+            complete=not stopped and not truncated,
+            has_more=stopped or truncated,
             tags=tags,
         )
 

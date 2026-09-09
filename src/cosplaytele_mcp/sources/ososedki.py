@@ -125,6 +125,7 @@ class OsosedkiSource(GallerySource):
                 continue
             items.append(
                 ListingItem(
+                    kind="directory",
                     title=name,
                     path=name,
                     url=href,
