@@ -50,7 +50,7 @@ INSTRUCTIONS = """\
 Browse cosplay gallery sites. Return image URLs only; never download binaries.
 
 Typical flow:
-1. list_sources — source ids, category slugs, search/latest support
+1. list_sources — source ids, category slugs, search/latest/popular support
 2. If the user pastes a post URL, call open_url(url). Do not guess source.
 3. search(query) across all sources, browse(source, sort) for rankings,
    or browse_tag(source, tag) after you have a tag
@@ -59,6 +59,8 @@ Typical flow:
 
 exclude_ai defaults to true. get_gallery still returns AI sets, marked is_ai.
 Prefer one source when the user names it; otherwise search all.
+Do not fetch or decrypt video streams. has_video means the post has a video;
+tell the user to open the gallery URL. download_urls are offsite zip/cloud links.
 """
 
 READONLY_CLOSED = ToolAnnotations(read_only_hint=True, open_world_hint=False)
@@ -138,6 +140,7 @@ def _source_catalog() -> list[SourceInfo]:
             id=cls.id,
             name=cls.name,
             base_url=cls.base_url,
+            supports_popular=cls.supports_popular,
             supports_latest=cls.supports_latest,
             supports_search=cls.supports_search,
             categories=list(cls.category_names),
@@ -211,6 +214,15 @@ async def browse(
         str | None,
         Field(description="Optional category slug from list_sources.categories."),
     ] = None,
+    period: Annotated[
+        str | None,
+        Field(
+            description=(
+                "Optional ranking window. CosplayTele popular: last24hours, last7days, "
+                "last30days, all. Hentai Cosplay popular: day, week, month, year."
+            ),
+        ),
+    ] = None,
     exclude_ai: Annotated[bool, Field(description="Drop AI Art / AI Generated listings.")] = True,
 ) -> ListingPage:
     """List popular or latest galleries from one source.
@@ -223,6 +235,7 @@ async def browse(
     site = _registry(ctx).get(source)
     query = _blank_to_none(query)
     category = _blank_to_none(category)
+    period = _blank_to_none(period)
     try:
         if query:
             page_result = await site.search(query, page, category, exclude_ai=exclude_ai)
@@ -234,7 +247,12 @@ async def browse(
                 )
             page_result = await site.latest(page, category)
         else:
-            page_result = await site.popular(page, category)
+            if not site.supports_popular:
+                raise ToolError(
+                    f"{site.name} ({source}) does not support popular listings. "
+                    "Use sort='latest' or search() instead."
+                )
+            page_result = await site.popular(page, category, period=period)
         return apply_ai_filter(page_result, exclude_ai)
     except ToolError:
         raise
@@ -284,29 +302,33 @@ async def search(
     )
     semaphore = asyncio.Semaphore(SEARCH_CONCURRENCY)
 
-    async def run(site: GallerySource) -> ListingPage:
-        async with semaphore:
-            return await _search_site(site, query, page, category, exclude_ai)
+    async def run(site: GallerySource) -> tuple[GallerySource, ListingPage | Exception]:
+        try:
+            async with semaphore:
+                return site, await _search_site(site, query, page, category, exclude_ai)
+        except Exception as exc:
+            return site, exc
 
-    tasks = {asyncio.create_task(run(site)): site for site in sites}
+    tasks = [asyncio.create_task(run(site)) for site in sites]
     grouped: dict[str, list[SearchHit]] = {site.id: [] for site in sites}
     errors: list[str] = []
     has_next = False
     finished = 0
     try:
         for fut in asyncio.as_completed(tasks):
-            site = tasks[fut]
+            site, outcome = await fut
             finished += 1
             await ctx.report_progress(finished, total=len(tasks), message=site.id)
-            try:
-                result = await fut
-            except Exception as exc:
+            if isinstance(outcome, Exception):
                 if source != "all":
-                    raise _as_tool_error(exc) from exc
-                detail = str(exc) if isinstance(exc, SourceError) else describe_error(exc)
+                    raise _as_tool_error(outcome) from outcome
+                detail = (
+                    str(outcome) if isinstance(outcome, SourceError) else describe_error(outcome)
+                )
                 logger.warning("search failed for %s: %s", site.id, detail)
                 errors.append(f"{site.id}: {detail}")
                 continue
+            result = outcome
             has_next = has_next or result.has_next_page
             grouped[result.source] = [
                 _hit_from_item(result.source, item)
@@ -387,12 +409,9 @@ async def related(
     """
     site = _registry(ctx).get(source)
     try:
-        gallery = _flag_gallery(await site.gallery(path.strip(), offset=0, limit=0))
-        if not gallery.tags:
-            raise ToolError(f"{gallery.title} has no tags to find related sets.")
-        page_result = await site.by_tag(gallery.tags[0], page, exclude_ai=exclude_ai)
-        items = [item for item in page_result.items if item.path != gallery.path]
-        return apply_ai_filter(page_result.model_copy(update={"items": items}), exclude_ai)
+        return apply_ai_filter(
+            await site.related(path.strip(), page, exclude_ai=exclude_ai), exclude_ai
+        )
     except ToolError:
         raise
     except (SourceError, httpx.HTTPError) as exc:
