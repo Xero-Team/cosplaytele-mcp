@@ -6,7 +6,7 @@ from typing import Any
 
 from selectolax.parser import HTMLParser
 
-from cosplaytele_mcp.htmlutil import abs_url, img_src, path_of, slugify
+from cosplaytele_mcp.htmlutil import abs_url, img_src, looks_like_video, path_of, slugify
 from cosplaytele_mcp.http import Http
 from cosplaytele_mcp.models import ListingItem, ListingPage, SourceId
 
@@ -64,12 +64,20 @@ def wp_date(entry: dict[str, Any]) -> str | None:
     return str(raw).split("T", 1)[0]
 
 
-def wp_image_count(entry: dict[str, Any], base: str) -> int | None:
+def wp_content_html(entry: dict[str, Any]) -> str:
     content = entry.get("content")
     if not isinstance(content, dict):
-        return None
-    images = images_from_html(str(content.get("rendered") or ""), base)
+        return ""
+    return str(content.get("rendered") or "")
+
+
+def wp_image_count(entry: dict[str, Any], base: str) -> int | None:
+    images = images_from_html(wp_content_html(entry), base)
     return len(images) or None
+
+
+def wp_has_video(entry: dict[str, Any]) -> bool:
+    return looks_like_video(title=wp_title(entry), html=wp_content_html(entry))
 
 
 def images_from_html(html: str, base: str) -> list[str]:
@@ -115,6 +123,7 @@ def listing_from_posts(
                 tags=wp_terms(entry),
                 published_at=wp_date(entry),
                 image_count=wp_image_count(entry, link),
+                has_video=wp_has_video(entry),
             )
         )
     return ListingPage(source=source, page=page, has_next_page=has_next, items=items)
@@ -155,6 +164,27 @@ async def fetch_wp_posts(
     return posts, has_next
 
 
+async def fetch_wp_term_id(
+    http: Http,
+    terms_url: str,
+    *,
+    referer: str,
+    term: str,
+    extra: dict[str, str] | None = None,
+) -> int | None:
+    slug = slugify(term)
+    if not slug:
+        return None
+    params: dict[str, Any] = {"slug": slug, "per_page": "1"}
+    if extra:
+        params.update(extra)
+    payload = await http.get_json(terms_url, referer=referer, params=params)
+    if isinstance(payload, list) and payload and isinstance(payload[0], dict):
+        value = payload[0].get("id")
+        return int(value) if value is not None else None
+    return None
+
+
 async def fetch_wp_tag_id(
     http: Http,
     tags_url: str,
@@ -163,14 +193,4 @@ async def fetch_wp_tag_id(
     tag: str,
     extra: dict[str, str] | None = None,
 ) -> int | None:
-    slug = slugify(tag)
-    if not slug:
-        return None
-    params: dict[str, Any] = {"slug": slug, "per_page": "1"}
-    if extra:
-        params.update(extra)
-    payload = await http.get_json(tags_url, referer=referer, params=params)
-    if isinstance(payload, list) and payload and isinstance(payload[0], dict):
-        value = payload[0].get("id")
-        return int(value) if value is not None else None
-    return None
+    return await fetch_wp_term_id(http, tags_url, referer=referer, term=tag, extra=extra)

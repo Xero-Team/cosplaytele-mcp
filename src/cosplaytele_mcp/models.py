@@ -28,6 +28,7 @@ class SourceInfo(BaseModel):
     id: SourceId
     name: str
     base_url: str
+    supports_popular: bool = True
     supports_latest: bool
     supports_search: bool
     categories: list[str] = Field(
@@ -45,6 +46,7 @@ class ListingItem(BaseModel):
     tags: list[str] = Field(default_factory=list)
     published_at: str | None = None
     image_count: int | None = None
+    has_video: bool = False
 
 
 class ListingPage(BaseModel):
@@ -78,6 +80,11 @@ class Gallery(BaseModel):
     tags: list[str] = Field(default_factory=list)
     published_at: str | None = None
     is_ai: bool = False
+    has_video: bool = False
+    download_urls: list[str] = Field(
+        default_factory=list,
+        description="Offsite zip/cloud links from the post, if any. Not video streams.",
+    )
     image_count: int | None = Field(
         default=None,
         description="Total images if known. Null when the source was not fully scanned.",

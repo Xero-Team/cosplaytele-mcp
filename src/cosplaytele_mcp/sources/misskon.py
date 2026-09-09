@@ -1,40 +1,51 @@
 from __future__ import annotations
 
-from urllib.parse import quote, urlencode
+from urllib.parse import quote
 
 from selectolax.parser import HTMLParser
 
 from cosplaytele_mcp.htmlutil import abs_url, attr, img_src, path_of, slugify, text_of
 from cosplaytele_mcp.models import Gallery, ListingItem, ListingPage, needed_images
 from cosplaytele_mcp.sources.base import GallerySource, SourceError
+from cosplaytele_mcp.wordpress import fetch_wp_posts, fetch_wp_tag_id, listing_from_posts
 
 
 class MissKonSource(GallerySource):
     id = "misskon"
     name = "MissKon"
     base_url = "https://misskon.com"
+    supports_popular = False
     category_names = ("cosplay",)
 
-    async def popular(self, page: int, category: str | None = None) -> ListingPage:
-        return await self.latest(page, category)
+    async def popular(
+        self, page: int, category: str | None = None, period: str | None = None
+    ) -> ListingPage:
+        raise SourceError(
+            f"{self.name} does not support popular listings. Use sort='latest' or search() instead."
+        )
 
     async def latest(self, page: int, category: str | None = None) -> ListingPage:
         slug = slugify(category) if category else "cosplay"
-        return await self._tag_listing(slug, page)
+        return await self._wp_or_tag(slug, page)
 
     async def search(
         self, query: str, page: int, category: str | None, exclude_ai: bool = True
     ) -> ListingPage:
         if query.strip():
-            url = f"{self.base_url}/page/{page}/?{urlencode({'s': query.strip()})}"
-            return await self._listing(url, page)
+            extra: dict[str, str] = {}
+            if exclude_ai:
+                await self._exclude_ai(extra)
+            return await self._wp_posts(page, search=query.strip(), extra=extra)
         return await self.latest(page, category)
 
     async def by_tag(self, tag: str, page: int, exclude_ai: bool = True) -> ListingPage:
         slug = slugify(tag)
         if not slug:
             raise SourceError("tag must not be blank")
-        return await self._tag_listing(slug, page)
+        extra: dict[str, str] = {}
+        if exclude_ai:
+            await self._exclude_ai(extra)
+        return await self._wp_or_tag(slug, page, extra=extra)
 
     async def gallery(self, path: str, *, offset: int = 0, limit: int | None = None) -> Gallery:
         resolved = self.resolve_path(path)
@@ -92,6 +103,44 @@ class MissKonSource(GallerySource):
             has_more=stopped,
             tags=tags,
         )
+
+    async def _exclude_ai(self, extra: dict[str, str]) -> None:
+        tag_id = await fetch_wp_tag_id(
+            self.http,
+            f"{self.base_url}/wp-json/wp/v2/tags",
+            referer=f"{self.base_url}/",
+            tag="ai-generated",
+        )
+        if tag_id is not None:
+            extra["tags_exclude"] = str(tag_id)
+
+    async def _wp_posts(
+        self, page: int, search: str = "", extra: dict[str, str] | None = None
+    ) -> ListingPage:
+        posts, has_next = await fetch_wp_posts(
+            self.http,
+            f"{self.base_url}/wp-json/wp/v2/posts",
+            page=page,
+            referer=f"{self.base_url}/",
+            search=search or None,
+            extra=extra,
+        )
+        return listing_from_posts(self.id, page, posts, has_next)
+
+    async def _wp_or_tag(
+        self, slug: str, page: int, extra: dict[str, str] | None = None
+    ) -> ListingPage:
+        params = dict(extra or {})
+        tag_id = await fetch_wp_tag_id(
+            self.http,
+            f"{self.base_url}/wp-json/wp/v2/tags",
+            referer=f"{self.base_url}/",
+            tag=slug,
+        )
+        if tag_id is None:
+            return await self._tag_listing(slug, page)
+        params["tags"] = str(tag_id)
+        return await self._wp_posts(page, extra=params)
 
     async def _tag_listing(self, slug: str, page: int) -> ListingPage:
         encoded = quote(slug, safe="-")

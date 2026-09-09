@@ -3,26 +3,41 @@ from __future__ import annotations
 import re
 from html import unescape
 from typing import Any
-from urllib.parse import quote
 
 from selectolax.parser import HTMLParser
 
 from cosplaytele_mcp.ai import looks_like_ai
-from cosplaytele_mcp.htmlutil import abs_url, attr, img_src, path_of, slugify, text_of
+from cosplaytele_mcp.htmlutil import (
+    attr,
+    download_urls_from_html,
+    img_src,
+    looks_like_video,
+    path_of,
+    slugify,
+    text_of,
+)
 from cosplaytele_mcp.models import Gallery, ListingItem, ListingPage
 from cosplaytele_mcp.sources.base import GallerySource, SourceError
-from cosplaytele_mcp.wordpress import wp_image_count
+from cosplaytele_mcp.wordpress import (
+    fetch_wp_posts,
+    fetch_wp_tag_id,
+    listing_from_posts,
+    wp_has_video,
+    wp_image_count,
+)
 
 TAG_HREF = re.compile(r"/(tag|category)/")
 PAGE_SIZE = 20
-
+POPULAR_PERIODS = ("last24hours", "last7days", "last30days", "all")
 CATEGORIES = {
     "all": "",
-    "cosplay-nude": "category/cosplay-nude",
-    "cosplay-ero": "category/cosplay-ero",
-    "cosplay": "category/cosplay",
-    "nude": "category/nude",
-    "no-nude": "category/no-nude",
+    "cosplay-nude": "cosplay-nude",
+    "cosplay-ero": "cosplay-ero",
+    "video-cosplay": "video-cosplayy",
+    "free-style": "free-style",
+    "game": "game",
+    "anime": "anime",
+    "cosplay": "cosplay",
 }
 
 
@@ -32,15 +47,22 @@ class CosplayTeleSource(GallerySource):
     base_url = "https://cosplaytele.com"
     category_names = tuple(CATEGORIES)
 
-    async def popular(self, page: int, category: str | None = None) -> ListingPage:
+    async def popular(
+        self, page: int, category: str | None = None, period: str | None = None
+    ) -> ListingPage:
         if category:
             return await self.search("", page, category, exclude_ai=False)
+        window = (period or "last7days").strip()
+        if window not in POPULAR_PERIODS:
+            raise SourceError(
+                f"Unknown CosplayTele popular period {period!r}. Use one of: {', '.join(POPULAR_PERIODS)}"
+            )
         offset = (page - 1) * PAGE_SIZE
         url = (
             f"{self.base_url}/wp-json/wordpress-popular-posts/v1/popular-posts"
-            f"?offset={offset}&limit={PAGE_SIZE}&range=last7days"
+            f"?offset={offset}&limit={PAGE_SIZE}&range={window}"
             "&embed=true&_embed=wp:featuredmedia,wp:term"
-            "&_fields=title,link,date,_embedded,_links.wp:featuredmedia"
+            "&_fields=title,link,date,content,_embedded,_links.wp:featuredmedia"
         )
         payload = await self.http.get_json(url, referer=f"{self.base_url}/")
         if not isinstance(payload, list):
@@ -56,57 +78,75 @@ class CosplayTeleSource(GallerySource):
     async def latest(self, page: int, category: str | None = None) -> ListingPage:
         if category:
             return await self.search("", page, category, exclude_ai=False)
-        suffix = f"/page/{page}/" if page > 1 else "/"
-        return await self._parse_listing(f"{self.base_url}{suffix}", page)
+        return await self._wp_posts(page)
 
     async def search(
         self, query: str, page: int, category: str | None, exclude_ai: bool = True
     ) -> ListingPage:
-        params: dict[str, str] = {
-            "per_page": str(PAGE_SIZE),
-            "page": str(page),
-            "_embed": "wp:featuredmedia,wp:term",
-        }
-        if query.strip():
-            params["search"] = query.strip()
+        extra: dict[str, str] = {}
         if category:
-            key = category.strip().lower()
-            if key not in CATEGORIES:
-                raise SourceError(
-                    f"Unknown CosplayTele category {category!r}. Use one of: {', '.join(CATEGORIES)}"
-                )
-            slug = CATEGORIES[key].rsplit("/", 1)[-1]
-            if slug:
-                category_id = await self._category_id(slug)
-                if category_id is None:
-                    raise SourceError(f"CosplayTele category slug not found: {slug}")
-                params["categories"] = str(category_id)
+            category_id = await self._resolve_category_id(category)
+            if category_id is None:
+                raise SourceError(f"CosplayTele category slug not found: {category}")
+            extra["categories"] = str(category_id)
         if exclude_ai:
-            ai_id = await self._category_id("ai-art")
-            if ai_id is not None:
-                params["categories_exclude"] = str(ai_id)
-        if "search" not in params and "categories" not in params:
+            await self._exclude_ai(extra)
+        if not query.strip() and "categories" not in extra:
             return await self.latest(page)
-        response = await self.http.get(
-            f"{self.base_url}/wp-json/wp/v2/posts",
-            referer=f"{self.base_url}/",
-            params=params,
-        )
-        payload = response.json()
-        if not isinstance(payload, list):
-            raise SourceError("CosplayTele search API returned unexpected JSON")
-        items = [self._from_wp_post(entry) for entry in payload if isinstance(entry, dict)]
-        total_pages = int(response.headers.get("x-wp-totalpages") or 0)
-        has_next = page < total_pages if total_pages else len(items) >= PAGE_SIZE
-        return ListingPage(source=self.id, page=page, has_next_page=has_next, items=items)
+        return await self._wp_posts(page, search=query, extra=extra)
 
     async def by_tag(self, tag: str, page: int, exclude_ai: bool = True) -> ListingPage:
         slug = slugify(tag)
         if not slug:
             raise SourceError("tag must not be blank")
-        encoded = quote(slug, safe="-")
-        suffix = f"/page/{page}/" if page > 1 else "/"
-        return await self._parse_listing(f"{self.base_url}/tag/{encoded}{suffix}", page)
+        extra: dict[str, str] = {}
+        tag_id = await fetch_wp_tag_id(
+            self.http,
+            f"{self.base_url}/wp-json/wp/v2/tags",
+            referer=f"{self.base_url}/",
+            tag=slug,
+        )
+        if tag_id is not None:
+            extra["tags"] = str(tag_id)
+        else:
+            category_id = await self._category_id(slug)
+            if category_id is None:
+                return await self.search(tag, page, None, exclude_ai=exclude_ai)
+            extra["categories"] = str(category_id)
+        if exclude_ai:
+            await self._exclude_ai(extra)
+        return await self._wp_posts(page, extra=extra)
+
+    async def related(self, path: str, page: int, exclude_ai: bool = True) -> ListingPage:
+        resolved = self.resolve_path(path)
+        slug = resolved.strip("/").rsplit("/", 1)[-1]
+        posts, _ = await fetch_wp_posts(
+            self.http,
+            f"{self.base_url}/wp-json/wp/v2/posts",
+            page=1,
+            referer=f"{self.base_url}/",
+            extra={"slug": slug, "per_page": "1", "page": "1"},
+        )
+        if not posts:
+            return await super().related(path, page, exclude_ai=exclude_ai)
+        post_id = posts[0].get("id")
+        if post_id is None:
+            return await super().related(path, page, exclude_ai=exclude_ai)
+        payload = await self.http.get_json(
+            f"{self.base_url}/wp-json/contextual-related-posts/v1/posts",
+            referer=f"{self.base_url}/",
+            params={"id": str(post_id), "limit": str(PAGE_SIZE * page)},
+        )
+        related_posts = (
+            [entry for entry in payload if isinstance(entry, dict)]
+            if isinstance(payload, list)
+            else []
+        )
+        start = (page - 1) * PAGE_SIZE
+        window = related_posts[start : start + PAGE_SIZE]
+        listing = listing_from_posts(self.id, page, window, len(related_posts) > start + PAGE_SIZE)
+        items = [item for item in listing.items if item.path != resolved]
+        return listing.model_copy(update={"items": items})
 
     async def gallery(self, path: str, *, offset: int = 0, limit: int | None = None) -> Gallery:
         resolved = self.resolve_path(path)
@@ -120,6 +160,7 @@ class CosplayTeleSource(GallerySource):
         images = self._gallery_images(document)
         if not images:
             raise SourceError(f"CosplayTele gallery has no images: {url}")
+        html = document.html or ""
         return self.make_gallery(
             title=title,
             path=resolved,
@@ -130,27 +171,43 @@ class CosplayTeleSource(GallerySource):
             tags=tags,
             published_at=published.split("T", 1)[0] if published else None,
             is_ai=looks_like_ai(title=title, path=resolved, tags=tags),
+            has_video=looks_like_video(title=title, html=html),
+            download_urls=download_urls_from_html(html),
         )
 
-    async def _parse_listing(self, url: str, page: int) -> ListingPage:
-        document = await self.http.get_html(url, referer=f"{self.base_url}/")
-        items: list[ListingItem] = []
-        for box in document.css("main div.box, div.box.box-blog-post"):
-            link = box.css_first("h5 a, .box-text-inner a, h2 a, h3 a")
-            href = abs_url(self.base_url, attr(link, "href"))
-            title = text_of(link)
-            if not href or not title:
-                continue
-            items.append(
-                ListingItem(
-                    title=title,
-                    path=path_of(href),
-                    url=href,
-                    thumbnail_url=img_src(box.css_first("img"), self.base_url),
-                )
+    async def _wp_posts(
+        self, page: int, search: str = "", extra: dict[str, str] | None = None
+    ) -> ListingPage:
+        posts, has_next = await fetch_wp_posts(
+            self.http,
+            f"{self.base_url}/wp-json/wp/v2/posts",
+            page=page,
+            referer=f"{self.base_url}/",
+            search=search or None,
+            extra=extra,
+        )
+        listing = listing_from_posts(self.id, page, posts, has_next)
+        items = [
+            item.model_copy(
+                update={"is_ai": looks_like_ai(title=item.title, path=item.path, tags=item.tags)}
             )
-        has_next = document.css_first(".next.page-number, a.next.page-numbers") is not None
-        return ListingPage(source=self.id, page=page, has_next_page=has_next, items=items)
+            for item in listing.items
+        ]
+        return listing.model_copy(update={"items": items})
+
+    async def _resolve_category_id(self, category: str) -> int | None:
+        key = category.strip().lower().strip("/")
+        slug = CATEGORIES.get(key, key)
+        if slug.startswith("category/"):
+            slug = slug.rsplit("/", 1)[-1]
+        if not slug:
+            return None
+        return await self._category_id(slug)
+
+    async def _exclude_ai(self, extra: dict[str, str]) -> None:
+        ai_id = await self._category_id("ai-art")
+        if ai_id is not None:
+            extra["categories_exclude"] = str(ai_id)
 
     async def _category_id(self, slug: str) -> int | None:
         payload = await self.http.get_json(
@@ -201,6 +258,7 @@ class CosplayTeleSource(GallerySource):
             tags=tags,
             published_at=published,
             is_ai=looks_like_ai(title=title, path=path_of(link), tags=tags),
+            has_video=wp_has_video(entry) or looks_like_video(title=title),
         )
 
     def _gallery_images(self, document: HTMLParser) -> list[str]:

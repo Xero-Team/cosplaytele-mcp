@@ -6,36 +6,47 @@ from cosplaytele_mcp.sources.base import GallerySource, SourceError
 from cosplaytele_mcp.wordpress import (
     fetch_wp_posts,
     fetch_wp_tag_id,
+    fetch_wp_term_id,
     images_from_html,
     listing_from_posts,
 )
 
 COSPLAY_CATEGORY = "7"
+CATEGORY_SLUGS = {
+    "cosplay": "cosplay",
+    "japan": "japan",
+    "china": "chinese",
+    "korea": "korea",
+    "thailand": "thailand",
+}
 
 
 class EveriaSource(GallerySource):
     id = "everia"
     name = "Everia"
     base_url = "https://everia.club"
-    category_names = ("cosplay",)
+    supports_popular = False
+    category_names = ("cosplay", "japan", "china", "korea", "thailand")
 
     def _posts_url(self) -> str:
         return f"{self.base_url}/wp-json/wp/v2/posts"
 
-    async def popular(self, page: int, category: str | None = None) -> ListingPage:
-        return await self._posts(
-            page, extra={"categories": COSPLAY_CATEGORY, "orderby": "modified"}
+    async def popular(
+        self, page: int, category: str | None = None, period: str | None = None
+    ) -> ListingPage:
+        raise SourceError(
+            f"{self.name} does not support popular listings. Use sort='latest' or search() instead."
         )
 
     async def latest(self, page: int, category: str | None = None) -> ListingPage:
-        return await self._posts(page, extra={"categories": COSPLAY_CATEGORY})
+        return await self._posts(page, extra={"categories": await self._category_id(category)})
 
     async def search(
         self, query: str, page: int, category: str | None, exclude_ai: bool = True
     ) -> ListingPage:
         extra: dict[str, str] = {}
-        if not query.strip():
-            extra["categories"] = COSPLAY_CATEGORY
+        if category or not query.strip():
+            extra["categories"] = await self._category_id(category)
         return await self._posts(page, search=query, extra=extra)
 
     async def by_tag(self, tag: str, page: int, exclude_ai: bool = True) -> ListingPage:
@@ -106,6 +117,21 @@ class EveriaSource(GallerySource):
             has_more=True,
             tags=tags,
         )
+
+    async def _category_id(self, category: str | None) -> str:
+        key = (category or "cosplay").strip().lower()
+        slug = CATEGORY_SLUGS.get(key, key)
+        term_id = await fetch_wp_term_id(
+            self.http,
+            f"{self.base_url}/wp-json/wp/v2/categories",
+            referer=f"{self.base_url}/",
+            term=slug,
+        )
+        if term_id is not None:
+            return str(term_id)
+        if category:
+            raise SourceError(f"Everia category slug not found: {category}")
+        return COSPLAY_CATEGORY
 
     async def _posts(
         self, page: int, search: str = "", extra: dict[str, str] | None = None

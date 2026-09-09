@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from urllib.parse import unquote
 
 from selectolax.parser import HTMLParser
 
@@ -22,9 +23,11 @@ class OsosedkiSource(GallerySource):
     id = "ososedki"
     name = "OSOSEDKI"
     base_url = "https://ososedki.com"
-    category_names = tuple(sorted(FILTER_TYPES))
+    category_names = (*sorted(FILTER_TYPES), "cosplays")
 
-    async def popular(self, page: int, category: str | None = None) -> ListingPage:
+    async def popular(
+        self, page: int, category: str | None = None, period: str | None = None
+    ) -> ListingPage:
         if category:
             return await self._category_albums(category, page, query="")
         return await self._albums(page, type="top", value="1")
@@ -47,7 +50,14 @@ class OsosedkiSource(GallerySource):
         label = tag.strip()
         if not label:
             raise SourceError("tag must not be blank")
-        return await self._albums(page, type="cosplay", value=label)
+        kind, _, value = label.partition(":")
+        if kind.lower() in FILTER_TYPES and value.strip():
+            return await self._albums(page, type=kind.lower(), value=value.strip())
+        for filter_type in ("cosplay", "model", "fandom"):
+            result = await self._albums(page, type=filter_type, value=label)
+            if result.items:
+                return result
+        return ListingPage(source=self.id, page=page, has_next_page=False, items=[])
 
     async def gallery(self, path: str, *, offset: int = 0, limit: int | None = None) -> Gallery:
         album_id = self._album_id(path)
@@ -88,13 +98,40 @@ class OsosedkiSource(GallerySource):
         kind, _, value = category.partition(":")
         kind = kind.strip().lower()
         value = value.strip() or query.strip()
+        if kind == "cosplays":
+            return await self._cosplay_directory(page)
         if kind not in FILTER_TYPES:
             raise SourceError(
-                f"OSOSEDKI category must be model:, cosplay:, or fandom:. Got {category!r}"
+                "OSOSEDKI category must be cosplays, or model:/cosplay:/fandom: with a value. "
+                f"Got {category!r}"
             )
         if not value:
             raise SourceError("OSOSEDKI category search needs a value, e.g. cosplay:Genshin")
         return await self._albums(page, type=kind, value=value)
+
+    async def _cosplay_directory(self, page: int) -> ListingPage:
+        suffix = f"?page={page}" if page > 1 else ""
+        document = await self.http.get_html(
+            f"{self.base_url}/cosplays{suffix}",
+            referer=f"{self.base_url}/",
+        )
+        items: list[ListingItem] = []
+        for node in document.css("a.card[href^='/cosplay/']"):
+            href = abs_url(self.base_url, attr(node, "href"))
+            if not href:
+                continue
+            name = unquote(href.rstrip("/").rsplit("/", 1)[-1].replace("+", " "))
+            if not name:
+                continue
+            items.append(
+                ListingItem(
+                    title=name,
+                    path=name,
+                    url=href,
+                )
+            )
+        has_next = document.css_first(f"a[href*='cosplays?page={page + 1}']") is not None
+        return ListingPage(source=self.id, page=page, has_next_page=has_next, items=items)
 
     async def _albums(
         self, page: int, type: str | None = None, value: str | None = None

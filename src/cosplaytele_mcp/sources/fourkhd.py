@@ -1,13 +1,15 @@
 from __future__ import annotations
 
-from cosplaytele_mcp.htmlutil import path_of
+from cosplaytele_mcp.htmlutil import download_urls_from_html, looks_like_video, path_of
 from cosplaytele_mcp.models import Gallery, ListingPage
 from cosplaytele_mcp.sources.base import GallerySource, SourceError
 from cosplaytele_mcp.wordpress import (
     fetch_wp_posts,
     fetch_wp_tag_id,
+    fetch_wp_term_id,
     images_from_html,
     listing_from_posts,
+    wp_content_html,
     wp_terms,
     wp_title,
 )
@@ -32,10 +34,21 @@ class FourKHDSource(GallerySource):
     def _api(self) -> str:
         return f"{self.base_url}/index.php"
 
-    async def popular(self, page: int, category: str | None = None) -> ListingPage:
-        return await self._posts(
-            page, extra={"rest_route": "/wp/v2/posts", "_embed": "1", "orderby": "modified"}
+    async def popular(
+        self, page: int, category: str | None = None, period: str | None = None
+    ) -> ListingPage:
+        extra = {"rest_route": "/wp/v2/posts", "_embed": "1", "orderby": "date"}
+        cat_id = await fetch_wp_term_id(
+            self.http,
+            self._api(),
+            referer=f"{self.base_url}/",
+            term="popular",
+            extra={"rest_route": "/wp/v2/categories"},
         )
+        if cat_id is None:
+            raise SourceError("4KHD popular category not found")
+        extra["categories"] = str(cat_id)
+        return await self._posts(page, extra=extra)
 
     async def latest(self, page: int, category: str | None = None) -> ListingPage:
         return await self._posts(
@@ -87,10 +100,7 @@ class FourKHDSource(GallerySource):
         title = wp_title(post)
         tags = wp_terms(post)
         link = str(post.get("link") or self.absolute(resolved))
-        content = ""
-        raw = post.get("content")
-        if isinstance(raw, dict):
-            content = str(raw.get("rendered") or "")
+        content = wp_content_html(post)
         images = [
             _rewrite_cdn(url, thumbnail=False) for url in images_from_html(content, self.base_url)
         ]
@@ -106,6 +116,8 @@ class FourKHDSource(GallerySource):
             limit=limit,
             thumbnail_url=_rewrite_cdn(images[0], thumbnail=True),
             tags=tags,
+            has_video=looks_like_video(title=title, html=content),
+            download_urls=download_urls_from_html(content),
         )
 
     async def _posts(

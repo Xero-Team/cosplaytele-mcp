@@ -15,7 +15,9 @@ class Beauty3600000Source(GallerySource):
     supports_latest = False
     category_names = ("cosplay",)
 
-    async def popular(self, page: int, category: str | None = None) -> ListingPage:
+    async def popular(
+        self, page: int, category: str | None = None, period: str | None = None
+    ) -> ListingPage:
         suffix = f"/category/cosplay/page/{page}/" if page > 1 else "/category/cosplay/"
         return await self._listing(f"{self.base_url}{suffix}", page)
 

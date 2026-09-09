@@ -16,7 +16,9 @@ class FoamGirlSource(GallerySource):
     supports_latest = False
     category_names = ("cosplay",)
 
-    async def popular(self, page: int, category: str | None = None) -> ListingPage:
+    async def popular(
+        self, page: int, category: str | None = None, period: str | None = None
+    ) -> ListingPage:
         url = f"{self.base_url}/cosplay/page/{page}" if page > 1 else f"{self.base_url}/cosplay"
         return await self._listing(url, page)
 

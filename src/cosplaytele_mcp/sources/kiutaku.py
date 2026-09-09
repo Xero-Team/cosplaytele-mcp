@@ -15,7 +15,9 @@ class KiutakuSource(GallerySource):
     def _offset(self, page: int) -> int:
         return (page - 1) * 20
 
-    async def popular(self, page: int, category: str | None = None) -> ListingPage:
+    async def popular(
+        self, page: int, category: str | None = None, period: str | None = None
+    ) -> ListingPage:
         return await self._listing(f"{self.base_url}/hot?start={self._offset(page)}", page)
 
     async def latest(self, page: int, category: str | None = None) -> ListingPage:

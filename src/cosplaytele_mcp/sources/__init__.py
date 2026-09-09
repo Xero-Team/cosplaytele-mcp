@@ -52,6 +52,12 @@ class SourceRegistry:
             raise SourceError(f"Not a gallery URL: {url}")
         source_id = HOST_TO_SOURCE.get(host)
         if source_id is None:
+            for cls in SOURCE_TYPES:
+                base = host_key(cls.base_url)
+                if host == base or (base and host.endswith(f".{base}")):
+                    source_id = cls.id
+                    break
+        if source_id is None:
             known = ", ".join(sorted({host_key(cls.base_url) for cls in SOURCE_TYPES}))
             raise SourceError(f"No source for host {host!r}. Known hosts: {known}")
         return self.get(source_id)

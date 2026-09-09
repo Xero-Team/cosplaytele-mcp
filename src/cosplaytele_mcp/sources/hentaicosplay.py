@@ -5,22 +5,42 @@ from urllib.parse import quote
 
 from selectolax.parser import HTMLParser, Node
 
-from cosplaytele_mcp.htmlutil import abs_url, attr, img_src, path_of, slugify, text_of
+from cosplaytele_mcp.htmlutil import (
+    abs_url,
+    attr,
+    img_src,
+    looks_like_video,
+    path_of,
+    slugify,
+    text_of,
+)
 from cosplaytele_mcp.models import Gallery, ListingItem, ListingPage, needed_images
 from cosplaytele_mcp.sources.base import GallerySource, SourceError
 
 HD_PATH = re.compile(r"(/p=\d+x?\d*/)")
+RANKINGS = {
+    "like": "ranking-like",
+    "bookmark": "ranking-bookmark",
+    "download": "ranking-download",
+    "tag": "ranking-tag",
+    "keyword": "ranking-keyword",
+    "images": "ranking-images",
+}
+RANK_PERIODS = ("day", "week", "month", "year")
 
 
 class HentaiCosplaySource(GallerySource):
     id = "hentaicosplay"
     name = "Hentai Cosplay"
     base_url = "https://hentai-cosplay-xxx.com"
+    category_names = tuple(RANKINGS)
 
-    async def popular(self, page: int, category: str | None = None) -> ListingPage:
-        if category:
+    async def popular(
+        self, page: int, category: str | None = None, period: str | None = None
+    ) -> ListingPage:
+        if category and category not in RANKINGS:
             return await self._category_listing(category, page)
-        return await self._parse_listing(f"{self.base_url}/ranking/page/{page}/", page)
+        return await self._parse_listing(self._ranking_url(page, category, period), page)
 
     async def latest(self, page: int, category: str | None = None) -> ListingPage:
         if category:
@@ -56,6 +76,9 @@ class HentaiCosplaySource(GallerySource):
         tags = [
             text_of(node) for node in document.css("#detail_tag a[href*='/tag/']") if text_of(node)
         ]
+        slug = resolved.strip("/").rsplit("/", 1)[-1]
+        download = [f"{self.base_url}/download-request/?type=image&url={slug}"]
+        has_video = looks_like_video(title=title)
         budget = needed_images(offset, limit)
         if budget == 0:
             return self.make_gallery(
@@ -68,6 +91,8 @@ class HentaiCosplaySource(GallerySource):
                 complete=False,
                 has_more=True,
                 tags=tags,
+                has_video=has_video,
+                download_urls=download,
             )
         story_path = resolved.replace("/image/", "/story/")
         story_url = self.absolute(story_path)
@@ -83,7 +108,20 @@ class HentaiCosplaySource(GallerySource):
             offset=offset,
             limit=limit,
             tags=tags,
+            has_video=has_video,
+            download_urls=download,
         )
+
+    def _ranking_url(self, page: int, category: str | None, period: str | None) -> str:
+        kind = RANKINGS.get(category or "", "ranking")
+        if period:
+            window = period.strip().lower()
+            if window not in RANK_PERIODS:
+                raise SourceError(
+                    f"Unknown Hentai Cosplay period {period!r}. Use one of: {', '.join(RANK_PERIODS)}"
+                )
+            return f"{self.base_url}/{kind}/type/{window}/page/{page}/"
+        return f"{self.base_url}/{kind}/page/{page}/"
 
     async def _category_listing(self, category: str, page: int) -> ListingPage:
         slug = category.strip().strip("/")

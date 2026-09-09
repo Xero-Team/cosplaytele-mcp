@@ -58,8 +58,53 @@ def path_of(url: str) -> str:
     return path
 
 
+DOWNLOAD_HOSTS = (
+    "gofile.io",
+    "sorafolder.com",
+    "mega.nz",
+    "mega.co.nz",
+    "mediafire.com",
+    "pixeldrain.com",
+    "workupload.com",
+    "drive.google.com",
+    "dropbox.com",
+    "krakenfiles.com",
+)
+
+VIDEO_HINT_RE = re.compile(r"\d+\s*videos?", re.IGNORECASE)
+
+
 def host_key(url: str) -> str:
     return (urlparse(url).hostname or "").lower().removeprefix("www.")
+
+
+def host_belongs(url: str, base_url: str) -> bool:
+    host = host_key(url)
+    base = host_key(base_url)
+    if not host or not base:
+        return False
+    return host == base or host.endswith(f".{base}")
+
+
+def looks_like_video(title: str = "", html: str = "") -> bool:
+    if title and VIDEO_HINT_RE.search(title):
+        return True
+    blob = html.lower()
+    return "cossora.stream" in blob or "<video" in blob
+
+
+def download_urls_from_html(html: str) -> list[str]:
+    urls: list[str] = []
+    seen: set[str] = set()
+    for href in re.findall(r"""href=["'](https?://[^"']+)""", html, re.I):
+        host = host_key(href)
+        if (
+            any(host == item or host.endswith(f".{item}") for item in DOWNLOAD_HOSTS)
+            and href not in seen
+        ):
+            seen.add(href)
+            urls.append(href)
+    return urls
 
 
 def slugify(value: str) -> str:
@@ -72,10 +117,7 @@ def normalize_path(path: str, base_url: str) -> str:
     raw = path.strip()
     if raw.startswith("http://") or raw.startswith("https://"):
         parsed = urlparse(raw)
-        base_host = urlparse(base_url).hostname or ""
-        if parsed.hostname and parsed.hostname.removeprefix("www.") != base_host.removeprefix(
-            "www."
-        ):
+        if parsed.hostname and not host_belongs(raw, base_url):
             raise ValueError(f"URL host {parsed.hostname} does not belong to {base_url}")
         return path_of(raw)
     if not raw.startswith("/"):

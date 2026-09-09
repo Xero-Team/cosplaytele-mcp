@@ -17,6 +17,7 @@ class GallerySource(ABC):
     id: ClassVar[SourceId]
     name: ClassVar[str]
     base_url: ClassVar[str]
+    supports_popular: ClassVar[bool] = True
     supports_latest: ClassVar[bool] = True
     supports_search: ClassVar[bool] = True
     category_names: ClassVar[tuple[str, ...]] = ()
@@ -29,6 +30,7 @@ class GallerySource(ABC):
             id=self.id,
             name=self.name,
             base_url=self.base_url,
+            supports_popular=self.supports_popular,
             supports_latest=self.supports_latest,
             supports_search=self.supports_search,
             categories=list(self.category_names),
@@ -61,6 +63,8 @@ class GallerySource(ABC):
         tags: list[str] | None = None,
         published_at: str | None = None,
         is_ai: bool = False,
+        has_video: bool = False,
+        download_urls: list[str] | None = None,
     ) -> Gallery:
         sliced, count, off, more = window_images(
             images,
@@ -79,6 +83,8 @@ class GallerySource(ABC):
             tags=tags or [],
             published_at=published_at,
             is_ai=is_ai,
+            has_video=has_video,
+            download_urls=download_urls or [],
             image_count=count,
             image_offset=off,
             has_more_images=more,
@@ -86,7 +92,9 @@ class GallerySource(ABC):
         )
 
     @abstractmethod
-    async def popular(self, page: int, category: str | None = None) -> ListingPage:
+    async def popular(
+        self, page: int, category: str | None = None, period: str | None = None
+    ) -> ListingPage:
         raise NotImplementedError
 
     async def latest(self, page: int, category: str | None = None) -> ListingPage:
@@ -112,6 +120,14 @@ class GallerySource(ABC):
         if not label:
             raise SourceError("tag must not be blank")
         return await self.search(label, page, None, exclude_ai=exclude_ai)
+
+    async def related(self, path: str, page: int, exclude_ai: bool = True) -> ListingPage:
+        gallery = await self.gallery(path.strip(), offset=0, limit=0)
+        if not gallery.tags:
+            raise SourceError(f"{gallery.title} has no tags to find related sets.")
+        page_result = await self.by_tag(gallery.tags[0], page, exclude_ai=exclude_ai)
+        items = [item for item in page_result.items if item.path != gallery.path]
+        return page_result.model_copy(update={"items": items})
 
     @abstractmethod
     async def gallery(self, path: str, *, offset: int = 0, limit: int | None = None) -> Gallery:

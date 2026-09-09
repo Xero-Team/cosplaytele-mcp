@@ -23,7 +23,9 @@ class MitakuSource(GallerySource):
     supports_latest = False
     category_names = tuple(CATEGORIES)
 
-    async def popular(self, page: int, category: str | None = None) -> ListingPage:
+    async def popular(
+        self, page: int, category: str | None = None, period: str | None = None
+    ) -> ListingPage:
         slug = CATEGORIES.get((category or "ero-cosplay").strip().lower(), "ero-cosplay")
         if category:
             mapped = CATEGORIES.get(category.strip().lower())
