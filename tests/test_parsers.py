@@ -2,27 +2,35 @@ import pytest
 from selectolax.parser import HTMLParser
 
 from cosplaytele_mcp.ai import apply_ai_filter, looks_like_ai
-from cosplaytele_mcp.htmlutil import host_key, normalize_path, slugify
+from cosplaytele_mcp.htmlutil import (
+    download_urls_from_html,
+    host_key,
+    looks_like_video,
+    normalize_path,
+    slugify,
+)
 from cosplaytele_mcp.models import ListingItem, ListingPage, SearchHit, needed_images, window_images
 from cosplaytele_mcp.server import interleave_hits
 from cosplaytele_mcp.sources import SourceError, SourceRegistry
-from cosplaytele_mcp.sources.cosplaytele import CosplayTeleSource
+from cosplaytele_mcp.sources.cosplaytele import CATEGORIES, CosplayTeleSource
 from cosplaytele_mcp.sources.hentaicosplay import HentaiCosplaySource
 from cosplaytele_mcp.sources.ososedki import OsosedkiSource
 from cosplaytele_mcp.wordpress import listing_from_posts
 
 GALLERY_HTML = """
 <html><body>
-<h1 class="entry-title">Kisaki Gallery</h1>
+<h1 class="entry-title">Kisaki Gallery 112 photos and 1 video</h1>
 <time class="updated" datetime="2026-09-09T18:22:18+08:00"></time>
 <div id="main">
   <a href="https://cosplaytele.com/category/cosplay/">Cosplay</a>
   <a href="https://cosplaytele.com/tag/blue-archive/">Blue Archive</a>
+  <a href="https://gofile.io/d/2zFOOMkn">Download</a>
 </div>
 <div class="gallery">
   <figure class="gallery-item"><img src="https://cosplaytele.com/wp-content/uploads/a.webp"></figure>
   <figure class="gallery-item"><img src="https://cosplaytele.com/wp-content/uploads/b.webp"></figure>
 </div>
+<iframe src="https://cossora.stream/embed/c52eff92-b996-4c30-9f54-1c7ddf5b3a57"></iframe>
 </body></html>
 """
 
@@ -62,6 +70,11 @@ def test_normalize_path_rejects_other_host() -> None:
         normalize_path("https://example.com/x", "https://cosplaytele.com")
 
 
+def test_normalize_path_accepts_language_subdomain() -> None:
+    base = "https://hentai-cosplay-xxx.com"
+    assert normalize_path("https://ja.hentai-cosplay-xxx.com/image/aqua/", base) == "/image/aqua/"
+
+
 def test_apply_ai_filter_drops_marked_items() -> None:
     page = ListingPage(
         source="cosplaytele",
@@ -91,6 +104,9 @@ def test_cosplaytele_gallery_images() -> None:
         "https://cosplaytele.com/wp-content/uploads/b.webp",
     ]
     assert source._tags(gallery) == ["Cosplay", "Blue Archive"]
+    html = gallery.html or ""
+    assert download_urls_from_html(html) == ["https://gofile.io/d/2zFOOMkn"]
+    assert looks_like_video(title="Kisaki Gallery 112 photos and 1 video", html=html)
     window = source.make_gallery(
         title="Kisaki Gallery",
         path="/kisaki/",
@@ -127,6 +143,21 @@ def test_hentaicosplay_title_from_og() -> None:
         """
     )
     assert source._title(document) == "Aqua Birthday Bunny (AI Generated)"
+
+
+def test_cosplaytele_known_categories() -> None:
+    assert "nude" not in CATEGORIES
+    assert "no-nude" not in CATEGORIES
+    assert "video-cosplay" in CATEGORIES
+    assert "free-style" in CATEGORIES
+
+
+def test_hentaicosplay_ranking_url() -> None:
+    source = HentaiCosplaySource(http=None)  # type: ignore[arg-type]
+    assert source._ranking_url(1, None, None).endswith("/ranking/page/1/")
+    assert source._ranking_url(2, "like", "day").endswith("/ranking-like/type/day/page/2/")
+    with pytest.raises(SourceError, match="period"):
+        source._ranking_url(1, "like", "last7days")
 
 
 def test_cosplaytele_wp_search_item() -> None:
@@ -223,8 +254,21 @@ def test_registry_by_url() -> None:
     registry = SourceRegistry(None)  # type: ignore[arg-type]
     assert registry.by_url("https://cosplaytele.com/ryuuge-kisaki-4/").id == "cosplaytele"
     assert registry.by_url("https://www.4khd.com/foo.html").id == "fourkhd"
+    assert registry.by_url("https://ja.hentai-cosplay-xxx.com/image/aqua/").id == "hentaicosplay"
     with pytest.raises(SourceError, match="No source for host"):
         registry.by_url("https://example.com/x")
+
+
+def test_download_urls_and_video_hints() -> None:
+    html = """
+    <a href="https://gofile.io/d/abc">zip</a>
+    <a href="https://t.me/skip">tg</a>
+    <iframe src="https://cossora.stream/embed/uuid"></iframe>
+    """
+    assert download_urls_from_html(html) == ["https://gofile.io/d/abc"]
+    assert looks_like_video(title="Kisaki 112 photos and 1 video")
+    assert looks_like_video(html=html)
+    assert not looks_like_video(title="Kisaki 112 photos")
 
 
 def test_interleave_hits() -> None:
@@ -271,6 +315,7 @@ def test_listing_from_posts_includes_tags_and_date() -> None:
     assert item.published_at == "2026-09-09"
     assert item.image_count == 2
     assert item.thumbnail_url == "https://cup2d.com/cover.webp"
+    assert item.has_video is False
 
 
 def test_apply_ai_filter_uses_listing_tags() -> None:

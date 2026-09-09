@@ -2,7 +2,45 @@ import pytest
 from mcp import Client
 from mcp.types import PromptReference, ResourceTemplateReference, TextContent
 
+from cosplaytele_mcp.models import ListingItem, ListingPage, SourceId
 from cosplaytele_mcp.server import mcp
+from cosplaytele_mcp.sources import SourceError
+
+
+class StubSearchSource:
+    supports_search = True
+    category_names: tuple[str, ...] = ()
+
+    def __init__(self, source_id: SourceId, outcome: ListingPage | Exception) -> None:
+        self.id = source_id
+        self.outcome = outcome
+
+    async def search(
+        self, query: str, page: int, category: str | None, *, exclude_ai: bool
+    ) -> ListingPage:
+        if isinstance(self.outcome, Exception):
+            raise self.outcome
+        return self.outcome
+
+
+class StubSearchRegistry:
+    def __init__(self, sources: list[StubSearchSource]) -> None:
+        self.sources = {source.id: source for source in sources}
+
+    def get(self, source_id: SourceId) -> StubSearchSource:
+        return self.sources[source_id]
+
+    def all(self) -> list[StubSearchSource]:
+        return list(self.sources.values())
+
+
+def search_page(source: SourceId, title: str, *, has_next_page: bool = False) -> ListingPage:
+    return ListingPage(
+        source=source,
+        page=1,
+        has_next_page=has_next_page,
+        items=[ListingItem(title=title, path=f"/{title}/", url=f"https://example.com/{title}/")],
+    )
 
 
 @pytest.fixture
@@ -86,11 +124,54 @@ async def test_search_rejects_blank_query(client: Client) -> None:
 
 
 @pytest.mark.anyio
+async def test_search_returns_single_source_results(monkeypatch: pytest.MonkeyPatch) -> None:
+    registry = StubSearchRegistry(
+        [StubSearchSource("cosplaytele", search_page("cosplaytele", "Miku"))]
+    )
+    monkeypatch.setattr("cosplaytele_mcp.server.SourceRegistry", lambda http: registry)
+    async with Client(mcp, raise_exceptions=True) as connected:
+        result = await connected.call_tool("search", {"query": "miku", "source": "cosplaytele"})
+    assert result.is_error is not True
+    payload = result.structured_content
+    assert payload is not None
+    assert [item["title"] for item in payload["items"]] == ["Miku"]
+
+
+@pytest.mark.anyio
+async def test_search_keeps_successful_sources_when_one_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry = StubSearchRegistry(
+        [
+            StubSearchSource("cosplaytele", search_page("cosplaytele", "Miku", has_next_page=True)),
+            StubSearchSource("hentaicosplay", SourceError("upstream unavailable")),
+        ]
+    )
+    monkeypatch.setattr("cosplaytele_mcp.server.SourceRegistry", lambda http: registry)
+    async with Client(mcp, raise_exceptions=True) as connected:
+        result = await connected.call_tool("search", {"query": "miku", "source": "all"})
+    assert result.is_error is not True
+    payload = result.structured_content
+    assert payload is not None
+    assert payload["has_next_page"] is True
+    assert [item["title"] for item in payload["items"]] == ["Miku"]
+    assert payload["errors"] == ["hentaicosplay: upstream unavailable"]
+
+
+@pytest.mark.anyio
 async def test_browse_latest_unsupported(client: Client) -> None:
     result = await client.call_tool("browse", {"source": "foamgirl", "sort": "latest"})
     assert result.is_error is True
     assert isinstance(result.content[0], TextContent)
     assert "does not support latest" in result.content[0].text
+
+
+@pytest.mark.anyio
+async def test_browse_popular_unsupported(client: Client) -> None:
+    result = await client.call_tool("browse", {"source": "everia", "sort": "popular"})
+    assert result.is_error is True
+    assert isinstance(result.content[0], TextContent)
+    assert "does not support popular" in result.content[0].text
 
 
 @pytest.mark.anyio
