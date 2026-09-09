@@ -5,8 +5,8 @@ import logging
 import time
 from collections import OrderedDict
 from dataclasses import dataclass
-from typing import Any
-from urllib.parse import urlencode
+from typing import Any, Final
+from urllib.parse import urlencode, urljoin, urlparse
 
 import httpx
 from selectolax.parser import HTMLParser
@@ -20,6 +20,12 @@ HTTP_LIMITS = httpx.Limits(max_connections=20, max_keepalive_connections=10)
 HTTP_TIMEOUT = httpx.Timeout(30.0, connect=15.0)
 CACHE_TTL = 60.0
 CACHE_SIZE = 128
+MAX_REDIRECTS = 5
+USE_CLIENT_TIMEOUT: Final = object()
+
+
+class OutboundUrlError(httpx.RequestError):
+    """A request attempted to leave the configured source-site allowlist."""
 
 
 def describe_error(exc: BaseException) -> str:
@@ -61,11 +67,16 @@ class Http:
         *,
         cache_ttl: float = CACHE_TTL,
         cache_size: int = CACHE_SIZE,
+        allowed_hosts: tuple[str, ...] = (),
     ) -> None:
         self.client = client
         self._cache_ttl = cache_ttl
         self._cache_size = cache_size
         self._cache: OrderedDict[str, _CacheEntry] = OrderedDict()
+        self._allowed_hosts = tuple(
+            ((urlparse(host).hostname or host).lower().removeprefix("www."))
+            for host in allowed_hosts
+        )
 
     async def get(
         self,
@@ -73,8 +84,9 @@ class Http:
         *,
         referer: str | None = None,
         params: dict[str, Any] | None = None,
-        timeout: float | None = None,
+        timeout: float | httpx.Timeout | object | None = USE_CLIENT_TIMEOUT,
     ) -> httpx.Response:
+        self._validate_url(url)
         key = _cache_key(url, params)
         cached = self._cache_take(key)
         if cached is not None:
@@ -83,11 +95,8 @@ class Http:
         last_error: BaseException | None = None
         for attempt in range(RETRY_ATTEMPTS):
             try:
-                response = await self.client.get(
-                    url,
-                    params=params,
-                    headers=headers,
-                    timeout=timeout,
+                response = await self._get_following_safe_redirects(
+                    url, params=params, headers=headers, timeout=timeout
                 )
                 if response.status_code in RETRY_STATUSES and attempt < RETRY_ATTEMPTS - 1:
                     logger.debug("retryable HTTP %s for %s", response.status_code, url)
@@ -104,6 +113,51 @@ class Http:
                 await asyncio.sleep(RETRY_BACKOFF * (attempt + 1))
         raise last_error or RuntimeError(f"GET failed: {url}")
 
+    async def _get_following_safe_redirects(
+        self,
+        url: str,
+        *,
+        params: dict[str, Any] | None,
+        headers: dict[str, str] | None,
+        timeout: float | httpx.Timeout | object | None,
+    ) -> httpx.Response:
+        current_url = url
+        for redirect_count in range(MAX_REDIRECTS + 1):
+            self._validate_url(current_url)
+            request_args: dict[str, Any] = {"headers": headers, "follow_redirects": False}
+            if redirect_count == 0:
+                request_args["params"] = params
+            # Omitting timeout is meaningfully different from timeout=None:
+            # the former inherits AsyncClient's configured timeout.
+            if timeout is not USE_CLIENT_TIMEOUT:
+                request_args["timeout"] = timeout
+            response = await self.client.get(current_url, **request_args)
+            if not response.is_redirect:
+                return response
+            location = response.headers.get("location")
+            if not location:
+                return response
+            if redirect_count == MAX_REDIRECTS:
+                raise httpx.TooManyRedirects("Exceeded redirect limit", request=response.request)
+            current_url = urljoin(str(response.url), location)
+        raise AssertionError("unreachable")
+
+    def _validate_url(self, url: str) -> None:
+        parsed = urlparse(url)
+        host = (parsed.hostname or "").lower().removeprefix("www.")
+        try:
+            port = parsed.port
+        except ValueError as exc:
+            raise OutboundUrlError(f"Invalid port in URL {url!r}", request=None) from exc
+        if parsed.scheme not in {"http", "https"} or not host:
+            raise OutboundUrlError("Only absolute http(s) URLs are allowed", request=None)
+        if port not in {None, 80, 443}:
+            raise OutboundUrlError(f"Port {port} is not allowed for {host}", request=None)
+        if self._allowed_hosts and not any(
+            host == allowed or host.endswith(f".{allowed}") for allowed in self._allowed_hosts
+        ):
+            raise OutboundUrlError(f"Host {host!r} is not an allowed source site", request=None)
+
     async def get_html(self, url: str, *, referer: str | None = None) -> HTMLParser:
         response = await self.get(url, referer=referer)
         return HTMLParser(response.text)
@@ -114,7 +168,7 @@ class Http:
         *,
         referer: str | None = None,
         params: dict[str, Any] | None = None,
-        timeout: float | None = None,
+        timeout: float | httpx.Timeout | object | None = USE_CLIENT_TIMEOUT,
     ) -> Any:
         response = await self.get(url, referer=referer, params=params, timeout=timeout)
         return response.json()

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import ClassVar
+from typing import ClassVar, Literal
 from urllib.parse import urljoin
 
 from cosplaytele_mcp.htmlutil import normalize_path
@@ -20,6 +20,8 @@ class GallerySource(ABC):
     supports_popular: ClassVar[bool] = True
     supports_latest: ClassVar[bool] = True
     supports_search: ClassVar[bool] = True
+    popular_kind: ClassVar[Literal["ranking", "archive", "featured"]] = "ranking"
+    ranking_kinds: ClassVar[tuple[str, ...]] = ()
     category_names: ClassVar[tuple[str, ...]] = ()
 
     def __init__(self, http: Http) -> None:
@@ -33,13 +35,14 @@ class GallerySource(ABC):
             supports_popular=self.supports_popular,
             supports_latest=self.supports_latest,
             supports_search=self.supports_search,
+            popular_kind=self.popular_kind,
+            ranking_kinds=list(self.ranking_kinds),
             categories=list(self.category_names),
         )
 
     def absolute(self, path: str) -> str:
-        if path.startswith("http://") or path.startswith("https://"):
-            return path
-        return urljoin(f"{self.base_url}/", path.lstrip("/"))
+        resolved = self.resolve_path(path)
+        return urljoin(f"{self.base_url}/", resolved.lstrip("/"))
 
     def resolve_path(self, path: str) -> str:
         try:

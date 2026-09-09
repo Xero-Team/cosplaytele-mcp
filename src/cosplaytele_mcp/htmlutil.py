@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from html import unescape
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urljoin, urlparse, urlsplit
 
 from selectolax.parser import Node
 
@@ -22,7 +22,7 @@ def abs_url(base: str, value: str | None) -> str | None:
 def img_src(node: Node | None, base: str) -> str | None:
     if node is None:
         return None
-    for attr in ("data-original", "data-lazy-src", "data-src", "data-mfp-src", "file", "src"):
+    for attr in ("data-original", "data-lazy-src", "data-src", "data-mfp-src", "file"):
         value = node.attributes.get(attr)
         if not value:
             continue
@@ -32,8 +32,24 @@ def img_src(node: Node | None, base: str) -> str | None:
         return abs_url(base, text)
     srcset = node.attributes.get("srcset")
     if srcset:
-        first = srcset.split(",")[0].strip().split(" ")[0]
-        return abs_url(base, first)
+        candidates: list[tuple[int, str]] = []
+        for candidate in srcset.split(","):
+            parts = candidate.strip().split()
+            if not parts:
+                continue
+            width = int(parts[1][:-1]) if len(parts) > 1 and parts[1].endswith("w") else 0
+            candidates.append((width, parts[0]))
+        if candidates:
+            return abs_url(base, max(candidates)[1])
+    src = node.attributes.get("src")
+    if src:
+        text = src.strip()
+        if (
+            not text.lower().startswith("data:")
+            and "blank_" not in text
+            and "/images-lazyload" not in text
+        ):
+            return abs_url(base, text)
     return None
 
 
@@ -115,11 +131,19 @@ def slugify(value: str) -> str:
 
 def normalize_path(path: str, base_url: str) -> str:
     raw = path.strip()
-    if raw.startswith("http://") or raw.startswith("https://"):
-        parsed = urlparse(raw)
-        if parsed.hostname and not host_belongs(raw, base_url):
+    if not raw:
+        raise ValueError("path must not be blank")
+    parsed = urlsplit(raw)
+    if parsed.scheme or parsed.netloc:
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+            raise ValueError(f"path is not a valid http(s) URL: {path!r}")
+        if not host_belongs(raw, base_url):
             raise ValueError(f"URL host {parsed.hostname} does not belong to {base_url}")
         return path_of(raw)
+    # A leading slash normally makes a value relative.  Do not allow it to
+    # conceal an absolute URL, which urljoin() would otherwise follow.
+    if raw.lstrip("/").lower().startswith(("http:", "https:")):
+        raise ValueError("path must not contain an absolute URL")
     if not raw.startswith("/"):
         raw = f"/{raw}"
     return raw

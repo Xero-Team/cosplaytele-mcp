@@ -70,6 +70,11 @@ def test_normalize_path_rejects_other_host() -> None:
         normalize_path("https://example.com/x", "https://cosplaytele.com")
 
 
+def test_normalize_path_rejects_disguised_absolute_url() -> None:
+    with pytest.raises(ValueError, match="absolute URL"):
+        normalize_path("/http://127.0.0.1:8080/demo", "https://cosplaytele.com")
+
+
 def test_normalize_path_accepts_language_subdomain() -> None:
     base = "https://hentai-cosplay-xxx.com"
     assert normalize_path("https://ja.hentai-cosplay-xxx.com/image/aqua/", base) == "/image/aqua/"
