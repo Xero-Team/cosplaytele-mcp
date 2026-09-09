@@ -42,7 +42,15 @@ async def test_list_sources(client: Client) -> None:
 async def test_list_tools_and_resources(client: Client) -> None:
     tools = await client.list_tools()
     tool_names = {tool.name for tool in tools.tools}
-    assert {"list_sources", "browse", "search", "get_gallery"} <= tool_names
+    assert {
+        "list_sources",
+        "browse",
+        "search",
+        "get_gallery",
+        "open_url",
+        "browse_tag",
+        "related",
+    } <= tool_names
     by_name = {tool.name: tool for tool in tools.tools}
     assert by_name["list_sources"].annotations is not None
     assert by_name["list_sources"].annotations.read_only_hint is True
@@ -106,3 +114,38 @@ async def test_source_completions(client: Client) -> None:
         argument={"name": "source", "value": "foam"},
     )
     assert resource.completion.values == ["foamgirl"]
+
+
+@pytest.mark.anyio
+async def test_get_gallery_image_window_schema(client: Client) -> None:
+    tools = await client.list_tools()
+    by_name = {tool.name: tool for tool in tools.tools}
+    properties = by_name["get_gallery"].input_schema["properties"]
+    assert properties["offset"]["default"] == 0
+    assert properties["limit"]["default"] == 20
+    assert properties["limit"]["maximum"] == 100
+    open_props = by_name["open_url"].input_schema["properties"]
+    assert "url" in open_props
+    assert "source" not in open_props
+
+
+def test_main_help(capsys: pytest.CaptureFixture[str]) -> None:
+    from cosplaytele_mcp.server import main
+
+    with pytest.raises(SystemExit) as exc:
+        main(["--help"])
+    assert exc.value.code == 0
+    output = capsys.readouterr().out
+    assert "--transport" in output
+    assert "streamable-http" in output
+
+
+def test_package_version() -> None:
+    from pathlib import Path
+
+    from cosplaytele_mcp.server import _package_version
+    from cosplaytele_mcp.version import __version__
+
+    assert __version__ == "0.2.0"
+    assert _package_version() == __version__
+    assert f'version = "{__version__}"' in Path("pyproject.toml").read_text()

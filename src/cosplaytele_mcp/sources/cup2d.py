@@ -3,7 +3,12 @@ from __future__ import annotations
 from cosplaytele_mcp.htmlutil import text_of
 from cosplaytele_mcp.models import Gallery, ListingPage
 from cosplaytele_mcp.sources.base import GallerySource, SourceError
-from cosplaytele_mcp.wordpress import fetch_wp_posts, images_from_html, listing_from_posts
+from cosplaytele_mcp.wordpress import (
+    fetch_wp_posts,
+    fetch_wp_tag_id,
+    images_from_html,
+    listing_from_posts,
+)
 
 
 class Cup2DSource(GallerySource):
@@ -14,10 +19,10 @@ class Cup2DSource(GallerySource):
     def _posts_url(self) -> str:
         return f"{self.base_url}/wp-json/wp/v2/posts"
 
-    async def popular(self, page: int) -> ListingPage:
+    async def popular(self, page: int, category: str | None = None) -> ListingPage:
         return await self._posts(page)
 
-    async def latest(self, page: int) -> ListingPage:
+    async def latest(self, page: int, category: str | None = None) -> ListingPage:
         return await self._posts(page)
 
     async def search(
@@ -25,39 +30,53 @@ class Cup2DSource(GallerySource):
     ) -> ListingPage:
         return await self._posts(page, search=query)
 
-    async def gallery(self, path: str) -> Gallery:
+    async def by_tag(self, tag: str, page: int, exclude_ai: bool = True) -> ListingPage:
+        tag_id = await fetch_wp_tag_id(
+            self.http,
+            f"{self.base_url}/wp-json/wp/v2/tags",
+            referer=f"{self.base_url}/",
+            tag=tag,
+        )
+        if tag_id is None:
+            return await self._posts(page, search=tag)
+        return await self._posts(page, extra={"tags": str(tag_id)})
+
+    async def gallery(self, path: str, *, offset: int = 0, limit: int | None = None) -> Gallery:
         resolved = self.resolve_path(path)
         url = self.absolute(resolved)
         document = await self.http.get_html(url, referer=f"{self.base_url}/")
         title = text_of(document.css_first("h1.entry-title, .entry-title, h1"))
         if not title:
             raise SourceError(f"Cup2D title missing: {url}")
-        content = document.css_first("article, .entry-content, .post-content")
-        html = content.html if content is not None else document.html or ""
-        images = images_from_html(html, self.base_url)
-        if not images:
-            raise SourceError(f"Cup2D gallery has no images: {url}")
         tags = [
             text_of(node)
             for node in document.css("a[rel=tag], .post-tags a, .entry-tags a")
             if text_of(node)
         ]
-        return Gallery(
-            source=self.id,
+        content = document.css_first("article, .entry-content, .post-content")
+        html = content.html if content is not None else document.html or ""
+        images = images_from_html(html, self.base_url)
+        if not images:
+            raise SourceError(f"Cup2D gallery has no images: {url}")
+        return self.make_gallery(
             title=title,
             path=resolved,
             url=url,
-            thumbnail_url=images[0],
+            images=images,
+            offset=offset,
+            limit=limit,
             tags=tags,
-            image_urls=images,
         )
 
-    async def _posts(self, page: int, search: str = "") -> ListingPage:
+    async def _posts(
+        self, page: int, search: str = "", extra: dict[str, str] | None = None
+    ) -> ListingPage:
         posts, has_next = await fetch_wp_posts(
             self.http,
             self._posts_url(),
             page=page,
             referer=f"{self.base_url}/",
             search=search or None,
+            extra=extra,
         )
         return listing_from_posts(self.id, page, posts, has_next)

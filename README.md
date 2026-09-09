@@ -76,7 +76,9 @@ cosplaytele-mcp
 HTTP：
 
 ```bash
-uvx --from cosplaytele-mcp python -c "from cosplaytele_mcp.server import mcp; mcp.run(transport='streamable-http', port=8000)"
+uvx cosplaytele-mcp --transport streamable-http --port 8000
+# 或
+cosplaytele-mcp --transport streamable-http --host 127.0.0.1 --port 8000
 ```
 
 ## 源
@@ -98,9 +100,14 @@ uvx --from cosplaytele-mcp python -c "from cosplaytele_mcp.server import mcp; mc
 ## 工具
 
 - `list_sources`：源目录
-- `search(query, source=all, page=1, category?, exclude_ai=true)`：按站点真实接口搜索。`source=all` 时并行查全部源
-- `browse(source, sort=popular|latest, page=1, query?, category?, exclude_ai=true)`：排行 / 最新；带 `query` 时走该源搜索
-- `get_gallery(source, path)`：详情和图片 URL；`path` 用列表或搜索结果里的 `path`，也接受完整帖子 URL
+- `open_url(url, offset=0, limit=20)`：从完整帖子 URL 按域名选源并打开图集
+- `search(query, source=all, page=1, category?, exclude_ai=true)`：按站点真实接口搜索。`source=all` 时并行查全部源，结果按源交错排列
+- `browse(source, sort=popular|latest, page=1, query?, category?, exclude_ai=true)`：排行 / 最新；只带 `category` 时按该分类列出，不走关键词搜索；带 `query` 时走该源搜索
+- `browse_tag(source, tag, page=1, exclude_ai=true)`：按标签列出
+- `related(source, path, page=1, exclude_ai=true)`：用图集第一个标签找相近套图
+- `get_gallery(source, path, offset=0, limit=20)`：详情和图片 URL。默认只回前 20 张加 `image_count`；`limit=0` 只回元数据。`path` 用列表或搜索结果里的 `path`，也接受完整帖子 URL
+
+列表项在源站提供时带 `tags`、`published_at`、`image_count`。没有的字段为 `null` / 空列表，不会为凑字段再打详情。
 
 `exclude_ai` 默认开启。只认明确 AI 标记，避免误伤 `Ai Yamada`、`Ai Hoshino` 这类名字：
 

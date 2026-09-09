@@ -1,6 +1,6 @@
 [project]
 name = "cosplaytele-mcp"
-version = "0.1.1"
+version = "0.2.0"
 description = "MCP 2 server for CosplayTele and related gallery sites"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -11,6 +11,11 @@ dependencies = [
     "httpx>=0.28",
     "selectolax>=0.3",
 ]
+
+[project.urls]
+Homepage = "https://github.com/Xero-Team/cosplaytele-mcp"
+Repository = "https://github.com/Xero-Team/cosplaytele-mcp"
+Issues = "https://github.com/Xero-Team/cosplaytele-mcp/issues"
 
 [project.scripts]
 cosplaytele-mcp = "cosplaytele_mcp.server:main"

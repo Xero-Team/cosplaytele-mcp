@@ -3,7 +3,7 @@ from __future__ import annotations
 from urllib.parse import urlencode
 
 from cosplaytele_mcp.htmlutil import abs_url, attr, img_src, path_of, text_of
-from cosplaytele_mcp.models import Gallery, ListingItem, ListingPage
+from cosplaytele_mcp.models import Gallery, ListingItem, ListingPage, needed_images
 from cosplaytele_mcp.sources.base import GallerySource, SourceError
 
 
@@ -15,10 +15,10 @@ class KiutakuSource(GallerySource):
     def _offset(self, page: int) -> int:
         return (page - 1) * 20
 
-    async def popular(self, page: int) -> ListingPage:
+    async def popular(self, page: int, category: str | None = None) -> ListingPage:
         return await self._listing(f"{self.base_url}/hot?start={self._offset(page)}", page)
 
-    async def latest(self, page: int) -> ListingPage:
+    async def latest(self, page: int, category: str | None = None) -> ListingPage:
         return await self._listing(f"{self.base_url}/?start={self._offset(page)}", page)
 
     async def search(
@@ -29,7 +29,7 @@ class KiutakuSource(GallerySource):
         url = f"{self.base_url}/?{urlencode({'search': query.strip(), 'start': str(self._offset(page))})}"
         return await self._listing(url, page)
 
-    async def gallery(self, path: str) -> Gallery:
+    async def gallery(self, path: str, *, offset: int = 0, limit: int | None = None) -> Gallery:
         resolved = self.resolve_path(path)
         url = self.absolute(resolved)
         first = await self.http.get_html(url, referer=f"{self.base_url}/")
@@ -39,29 +39,52 @@ class KiutakuSource(GallerySource):
             for node in first.css("div.article-tags a.tag > span")
             if text_of(node)
         ]
+        budget = needed_images(offset, limit)
+        if budget == 0:
+            return self.make_gallery(
+                title=title,
+                path=resolved,
+                url=url,
+                images=[],
+                offset=offset,
+                limit=limit,
+                complete=False,
+                has_more=True,
+                tags=tags,
+            )
         page_urls = [url]
         for node in first.css("nav.pagination a"):
             href = abs_url(self.base_url, attr(node, "href"))
             if href:
                 page_urls.append(href)
         images: list[str] = []
-        for page_url in list(dict.fromkeys(page_urls))[:40]:
+        stopped = False
+        unique_pages = list(dict.fromkeys(page_urls))[:40]
+        for index, page_url in enumerate(unique_pages):
+            if budget is not None and len(images) >= budget:
+                stopped = True
+                break
             document = first if page_url == url else await self.http.get_html(page_url, referer=url)
             for img in document.css("div.article-fulltext img[src], div.article-fulltext img"):
                 src = img_src(img, self.base_url)
                 if src:
                     images.append(src)
+            if budget is not None and len(images) >= budget and index + 1 < len(unique_pages):
+                stopped = True
+                break
         images = list(dict.fromkeys(images))
         if not images:
             raise SourceError(f"Kiutaku gallery has no images: {url}")
-        return Gallery(
-            source=self.id,
+        return self.make_gallery(
             title=title,
             path=resolved,
             url=url,
-            thumbnail_url=images[0],
+            images=images,
+            offset=offset,
+            limit=limit,
+            complete=not stopped,
+            has_more=stopped,
             tags=tags,
-            image_urls=images,
         )
 
     async def _listing(self, url: str, page: int) -> ListingPage:

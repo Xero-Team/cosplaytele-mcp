@@ -1,11 +1,11 @@
 from __future__ import annotations
 
+import argparse
 import asyncio
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from importlib.metadata import PackageNotFoundError, version
 from typing import Annotated, Literal, cast
 
 import httpx
@@ -25,8 +25,11 @@ from pydantic import Field
 from cosplaytele_mcp.ai import apply_ai_filter, looks_like_ai
 from cosplaytele_mcp.http import DEFAULT_HEADERS, HTTP_LIMITS, HTTP_TIMEOUT, Http, describe_error
 from cosplaytele_mcp.models import (
+    DEFAULT_IMAGE_LIMIT,
+    MAX_IMAGE_LIMIT,
     BrowseSort,
     Gallery,
+    ListingItem,
     ListingPage,
     SearchHit,
     SearchPage,
@@ -35,6 +38,7 @@ from cosplaytele_mcp.models import (
 )
 from cosplaytele_mcp.sources import SOURCE_TYPES, SourceError, SourceRegistry
 from cosplaytele_mcp.sources.base import GallerySource
+from cosplaytele_mcp.version import __version__
 
 logger = logging.getLogger(__name__)
 
@@ -47,8 +51,11 @@ Browse cosplay gallery sites. Return image URLs only; never download binaries.
 
 Typical flow:
 1. list_sources — source ids, category slugs, search/latest support
-2. search(query) across all sources, or browse(source, sort) for rankings
-3. get_gallery(source, path) using a hit's path (full post URLs also work)
+2. If the user pastes a post URL, call open_url(url). Do not guess source.
+3. search(query) across all sources, browse(source, sort) for rankings,
+   or browse_tag(source, tag) after you have a tag
+4. get_gallery(source, path) using a hit's path. Default returns the first
+   images plus image_count; pass offset/limit for more. limit=0 is metadata only.
 
 exclude_ai defaults to true. get_gallery still returns AI sets, marked is_ai.
 Prefer one source when the user names it; otherwise search all.
@@ -59,10 +66,7 @@ READONLY_OPEN = ToolAnnotations(read_only_hint=True, open_world_hint=True)
 
 
 def _package_version() -> str:
-    try:
-        return version("cosplaytele-mcp")
-    except PackageNotFoundError:
-        return "0.1.0"
+    return __version__
 
 
 @dataclass
@@ -142,6 +146,31 @@ def _source_catalog() -> list[SourceInfo]:
     ]
 
 
+def interleave_hits(groups: list[list[SearchHit]]) -> list[SearchHit]:
+    items: list[SearchHit] = []
+    seen: set[tuple[str, str]] = set()
+    index = 0
+    while True:
+        added = False
+        for group in groups:
+            if index >= len(group):
+                continue
+            hit = group[index]
+            added = True
+            key = (hit.source, hit.path)
+            if key in seen:
+                continue
+            seen.add(key)
+            items.append(hit)
+        if not added:
+            return items
+        index += 1
+
+
+def _hit_from_item(source: SourceId, item: ListingItem) -> SearchHit:
+    return SearchHit(source=source, **item.model_dump())
+
+
 @mcp.tool(
     title="List gallery sources",
     annotations=READONLY_CLOSED,
@@ -188,23 +217,24 @@ async def browse(
 
     Use search() when the user names a character, series, model, or tag.
     If query is set, this tool searches that one source instead of ranking.
+    If only category is set, list that category with sort (not a keyword search).
     Pass each item's path to get_gallery to fetch image URLs.
     """
     site = _registry(ctx).get(source)
     query = _blank_to_none(query)
     category = _blank_to_none(category)
     try:
-        if query or category:
-            page_result = await site.search(query or "", page, category, exclude_ai=exclude_ai)
+        if query:
+            page_result = await site.search(query, page, category, exclude_ai=exclude_ai)
         elif sort == "latest":
             if not site.supports_latest:
                 raise ToolError(
                     f"{site.name} ({source}) does not support latest listings. "
                     "Use sort='popular' or search() instead."
                 )
-            page_result = await site.latest(page)
+            page_result = await site.latest(page, category)
         else:
-            page_result = await site.popular(page)
+            page_result = await site.popular(page, category)
         return apply_ai_filter(page_result, exclude_ai)
     except ToolError:
         raise
@@ -238,6 +268,7 @@ async def search(
     """Search galleries by character, series, model, or tag.
 
     source="all" (default) queries every searchable source in parallel.
+    Results are interleaved by source so one site cannot bury the rest.
     Failed sources appear in errors and do not fail the whole call.
     Pass a hit's source and path to get_gallery.
     """
@@ -258,7 +289,7 @@ async def search(
             return await _search_site(site, query, page, category, exclude_ai)
 
     tasks = {asyncio.create_task(run(site)): site for site in sites}
-    items: list[SearchHit] = []
+    grouped: dict[str, list[SearchHit]] = {site.id: [] for site in sites}
     errors: list[str] = []
     has_next = False
     finished = 0
@@ -277,21 +308,15 @@ async def search(
                 errors.append(f"{site.id}: {detail}")
                 continue
             has_next = has_next or result.has_next_page
-            items.extend(
-                SearchHit(
-                    source=result.source,
-                    title=item.title,
-                    path=item.path,
-                    url=item.url,
-                    thumbnail_url=item.thumbnail_url,
-                    is_ai=item.is_ai,
-                )
+            grouped[result.source] = [
+                _hit_from_item(result.source, item)
                 for item in apply_ai_filter(result, exclude_ai).items
-            )
+            ]
     except BaseException:
         for task in tasks:
             task.cancel()
         raise
+    items = interleave_hits([grouped[site.id] for site in sites])
     return SearchPage(query=query, page=page, has_next_page=has_next, items=items, errors=errors)
 
 
@@ -314,6 +339,106 @@ async def _search_site(
 
 
 @mcp.tool(
+    title="Browse galleries by tag",
+    annotations=READONLY_OPEN,
+)
+async def browse_tag(
+    source: Annotated[SourceId, Field(description="Source id from list_sources.")],
+    tag: Annotated[str, Field(min_length=1, max_length=200, description="Tag name or slug.")],
+    ctx: Context[AppContext],
+    page: Annotated[int, Field(ge=1, le=100, description="1-based page index.")] = 1,
+    exclude_ai: Annotated[bool, Field(description="Drop AI Art / AI Generated listings.")] = True,
+) -> ListingPage:
+    """List galleries for one tag on one source.
+
+    Prefer this over search() when you already have a tag from get_gallery.
+    """
+    label = tag.strip()
+    if not label:
+        raise ToolError("tag must not be blank.")
+    site = _registry(ctx).get(source)
+    try:
+        return apply_ai_filter(await site.by_tag(label, page, exclude_ai=exclude_ai), exclude_ai)
+    except (SourceError, httpx.HTTPError) as exc:
+        raise _as_tool_error(exc) from exc
+
+
+@mcp.tool(
+    title="Find related galleries",
+    annotations=READONLY_OPEN,
+)
+async def related(
+    source: Annotated[SourceId, Field(description="Source id from list_sources.")],
+    path: Annotated[
+        str,
+        Field(
+            min_length=1,
+            max_length=500,
+            description="ListingItem.path, SearchHit.path, or a full post URL.",
+        ),
+    ],
+    ctx: Context[AppContext],
+    page: Annotated[int, Field(ge=1, le=100, description="1-based page index.")] = 1,
+    exclude_ai: Annotated[bool, Field(description="Drop AI Art / AI Generated listings.")] = True,
+) -> ListingPage:
+    """Find more galleries sharing a tag with the given set.
+
+    Fetches metadata only, then browses the first tag. The original set is omitted.
+    """
+    site = _registry(ctx).get(source)
+    try:
+        gallery = _flag_gallery(await site.gallery(path.strip(), offset=0, limit=0))
+        if not gallery.tags:
+            raise ToolError(f"{gallery.title} has no tags to find related sets.")
+        page_result = await site.by_tag(gallery.tags[0], page, exclude_ai=exclude_ai)
+        items = [item for item in page_result.items if item.path != gallery.path]
+        return apply_ai_filter(page_result.model_copy(update={"items": items}), exclude_ai)
+    except ToolError:
+        raise
+    except (SourceError, httpx.HTTPError) as exc:
+        raise _as_tool_error(exc) from exc
+
+
+@mcp.tool(
+    title="Open a gallery URL",
+    annotations=READONLY_OPEN,
+)
+async def open_url(
+    url: Annotated[
+        str,
+        Field(
+            min_length=8,
+            max_length=500,
+            description="Full post URL, e.g. https://cosplaytele.com/ryuuge-kisaki-4/.",
+        ),
+    ],
+    ctx: Context[AppContext],
+    offset: Annotated[int, Field(ge=0, description="Image window start.")] = 0,
+    limit: Annotated[
+        int,
+        Field(
+            ge=0,
+            le=MAX_IMAGE_LIMIT,
+            description="Max image URLs to return. 0 returns metadata only.",
+        ),
+    ] = DEFAULT_IMAGE_LIMIT,
+) -> Gallery:
+    """Open a gallery from a full post URL.
+
+    Picks the source from the URL host. Use this when the user pastes a link.
+    """
+    text = url.strip()
+    if not text.startswith("http://") and not text.startswith("https://"):
+        raise ToolError("url must be a full http(s) post URL.")
+    registry = _registry(ctx)
+    try:
+        site = registry.by_url(text)
+        return _flag_gallery(await site.gallery(text, offset=offset, limit=limit))
+    except (SourceError, httpx.HTTPError) as exc:
+        raise _as_tool_error(exc) from exc
+
+
+@mcp.tool(
     title="Get a gallery",
     annotations=READONLY_OPEN,
 )
@@ -328,15 +453,25 @@ async def get_gallery(
         ),
     ],
     ctx: Context[AppContext],
+    offset: Annotated[int, Field(ge=0, description="Image window start.")] = 0,
+    limit: Annotated[
+        int,
+        Field(
+            ge=0,
+            le=MAX_IMAGE_LIMIT,
+            description="Max image URLs to return. 0 returns metadata only. Default 20.",
+        ),
+    ] = DEFAULT_IMAGE_LIMIT,
 ) -> Gallery:
-    """Fetch title, tags, and image URLs for one gallery.
+    """Fetch title, tags, and a window of image URLs for one gallery.
 
     path is ListingItem.path / SearchHit.path, a relative path, or a full post URL.
     Does not download image files. AI galleries are returned with is_ai=true.
+    If the user gave a full URL and you do not know the source, call open_url instead.
     """
     site = _registry(ctx).get(source)
     try:
-        return _flag_gallery(await site.gallery(path.strip()))
+        return _flag_gallery(await site.gallery(path.strip(), offset=offset, limit=limit))
     except (SourceError, httpx.HTTPError) as exc:
         raise _as_tool_error(exc) from exc
 
@@ -353,7 +488,11 @@ async def gallery_resource(source: str, path: str, ctx: Context[AppContext]) -> 
     if source not in SOURCE_IDS:
         raise ResourceNotFoundError(f"Unknown source {source!r}")
     try:
-        return _flag_gallery(await _registry(ctx).get(cast(SourceId, source)).gallery(path))
+        return _flag_gallery(
+            await _registry(ctx)
+            .get(cast(SourceId, source))
+            .gallery(path, offset=0, limit=DEFAULT_IMAGE_LIMIT)
+        )
     except SourceError as exc:
         raise ResourceNotFoundError(str(exc)) from exc
     except httpx.HTTPError as exc:
@@ -370,10 +509,11 @@ def find_gallery(
 ) -> str:
     """Search a cosplay gallery source and open a matching set."""
     return (
-        f"Call search with query={query!r} and source={source!r}. "
+        f"If the user gave a full post URL, call open_url with that URL. "
+        f"Otherwise call search with query={query!r} and source={source!r}. "
         f"Pick the best hit, then call get_gallery with that source and path. "
-        f"Summarize title, tags, image count, and the first few image URLs. "
-        f"Do not download image binaries."
+        f"Summarize title, tags, image_count, and the returned image URLs. "
+        f"Use offset/limit if you need more images. Do not download image binaries."
     )
 
 
@@ -394,9 +534,22 @@ async def handle_completion(
     return None
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> None:
     logging.basicConfig(level=logging.INFO)
-    mcp.run()
+    parser = argparse.ArgumentParser(prog="cosplaytele-mcp")
+    parser.add_argument(
+        "--transport",
+        choices=("stdio", "sse", "streamable-http"),
+        default="stdio",
+        help="MCP transport. stdio for local hosts; streamable-http for remote deploy.",
+    )
+    parser.add_argument("--host", default="127.0.0.1", help="Bind host for HTTP transports.")
+    parser.add_argument("--port", type=int, default=8000, help="Bind port for HTTP transports.")
+    args = parser.parse_args(argv)
+    if args.transport == "stdio":
+        mcp.run()
+    else:
+        mcp.run(transport=args.transport, host=args.host, port=args.port)
 
 
 if __name__ == "__main__":

@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 
 from selectolax.parser import HTMLParser
 
-from cosplaytele_mcp.htmlutil import abs_url, attr, img_src, path_of, text_of
-from cosplaytele_mcp.models import Gallery, ListingItem, ListingPage
+from cosplaytele_mcp.htmlutil import abs_url, attr, img_src, path_of, slugify, text_of
+from cosplaytele_mcp.models import Gallery, ListingItem, ListingPage, needed_images
 from cosplaytele_mcp.sources.base import GallerySource, SourceError
 
 
@@ -16,7 +16,7 @@ class FoamGirlSource(GallerySource):
     supports_latest = False
     category_names = ("cosplay",)
 
-    async def popular(self, page: int) -> ListingPage:
+    async def popular(self, page: int, category: str | None = None) -> ListingPage:
         url = f"{self.base_url}/cosplay/page/{page}" if page > 1 else f"{self.base_url}/cosplay"
         return await self._listing(url, page)
 
@@ -28,17 +28,46 @@ class FoamGirlSource(GallerySource):
         url = f"{self.base_url}/page/{page}/?{urlencode({'post_type': 'post', 's': query.strip()})}"
         return await self._listing(url, page)
 
-    async def gallery(self, path: str) -> Gallery:
+    async def by_tag(self, tag: str, page: int, exclude_ai: bool = True) -> ListingPage:
+        slug = slugify(tag)
+        if not slug:
+            raise SourceError("tag must not be blank")
+        encoded = quote(slug, safe="-")
+        url = (
+            f"{self.base_url}/tag/{encoded}/page/{page}"
+            if page > 1
+            else f"{self.base_url}/tag/{encoded}"
+        )
+        return await self._listing(url, page)
+
+    async def gallery(self, path: str, *, offset: int = 0, limit: int | None = None) -> Gallery:
         resolved = self.resolve_path(path)
         url = self.absolute(resolved)
         document = await self.http.get_html(url, referer=f"{self.base_url}/")
         title = text_of(document.css_first("h1, .meta-title, title"))
         if not title:
             raise SourceError(f"FoamGirl title missing: {url}")
+        budget = needed_images(offset, limit)
+        if budget == 0:
+            return self.make_gallery(
+                title=title,
+                path=resolved,
+                url=url,
+                images=[],
+                offset=offset,
+                limit=limit,
+                complete=False,
+                has_more=True,
+            )
         images: list[str] = []
         page_url = url
+        stopped = False
         for _ in range(40):
             images.extend(self._page_images(document))
+            if budget is not None and len(images) >= budget:
+                next_probe = document.css_first(".page-numbers[title='Next page']")
+                stopped = attr(next_probe, "href") is not None
+                break
             next_link = document.css_first(".page-numbers[title='Next page']")
             href = abs_url(self.base_url, attr(next_link, "href")) if next_link else None
             if not href or href == page_url or "_" not in href.rsplit("/", 1)[-1]:
@@ -48,13 +77,15 @@ class FoamGirlSource(GallerySource):
         images = list(dict.fromkeys(images))
         if not images:
             raise SourceError(f"FoamGirl gallery has no images: {url}")
-        return Gallery(
-            source=self.id,
+        return self.make_gallery(
             title=title,
             path=resolved,
             url=url,
-            thumbnail_url=images[0],
-            image_urls=images,
+            images=images,
+            offset=offset,
+            limit=limit,
+            complete=not stopped,
+            has_more=stopped,
         )
 
     async def _listing(self, url: str, page: int) -> ListingPage:

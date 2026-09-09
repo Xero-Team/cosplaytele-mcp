@@ -3,13 +3,15 @@ from __future__ import annotations
 import re
 from html import unescape
 from typing import Any
+from urllib.parse import quote
 
 from selectolax.parser import HTMLParser
 
 from cosplaytele_mcp.ai import looks_like_ai
-from cosplaytele_mcp.htmlutil import abs_url, attr, img_src, path_of, text_of
+from cosplaytele_mcp.htmlutil import abs_url, attr, img_src, path_of, slugify, text_of
 from cosplaytele_mcp.models import Gallery, ListingItem, ListingPage
 from cosplaytele_mcp.sources.base import GallerySource, SourceError
+from cosplaytele_mcp.wordpress import wp_image_count
 
 TAG_HREF = re.compile(r"/(tag|category)/")
 PAGE_SIZE = 20
@@ -30,13 +32,15 @@ class CosplayTeleSource(GallerySource):
     base_url = "https://cosplaytele.com"
     category_names = tuple(CATEGORIES)
 
-    async def popular(self, page: int) -> ListingPage:
+    async def popular(self, page: int, category: str | None = None) -> ListingPage:
+        if category:
+            return await self.search("", page, category, exclude_ai=False)
         offset = (page - 1) * PAGE_SIZE
         url = (
             f"{self.base_url}/wp-json/wordpress-popular-posts/v1/popular-posts"
             f"?offset={offset}&limit={PAGE_SIZE}&range=last7days"
-            "&embed=true&_embed=wp:featuredmedia"
-            "&_fields=title,link,_embedded,_links.wp:featuredmedia"
+            "&embed=true&_embed=wp:featuredmedia,wp:term"
+            "&_fields=title,link,date,_embedded,_links.wp:featuredmedia"
         )
         payload = await self.http.get_json(url, referer=f"{self.base_url}/")
         if not isinstance(payload, list):
@@ -49,7 +53,9 @@ class CosplayTeleSource(GallerySource):
             items=items,
         )
 
-    async def latest(self, page: int) -> ListingPage:
+    async def latest(self, page: int, category: str | None = None) -> ListingPage:
+        if category:
+            return await self.search("", page, category, exclude_ai=False)
         suffix = f"/page/{page}/" if page > 1 else "/"
         return await self._parse_listing(f"{self.base_url}{suffix}", page)
 
@@ -59,7 +65,7 @@ class CosplayTeleSource(GallerySource):
         params: dict[str, str] = {
             "per_page": str(PAGE_SIZE),
             "page": str(page),
-            "_embed": "wp:featuredmedia",
+            "_embed": "wp:featuredmedia,wp:term",
         }
         if query.strip():
             params["search"] = query.strip()
@@ -94,28 +100,36 @@ class CosplayTeleSource(GallerySource):
         has_next = page < total_pages if total_pages else len(items) >= PAGE_SIZE
         return ListingPage(source=self.id, page=page, has_next_page=has_next, items=items)
 
-    async def gallery(self, path: str) -> Gallery:
+    async def by_tag(self, tag: str, page: int, exclude_ai: bool = True) -> ListingPage:
+        slug = slugify(tag)
+        if not slug:
+            raise SourceError("tag must not be blank")
+        encoded = quote(slug, safe="-")
+        suffix = f"/page/{page}/" if page > 1 else "/"
+        return await self._parse_listing(f"{self.base_url}/tag/{encoded}{suffix}", page)
+
+    async def gallery(self, path: str, *, offset: int = 0, limit: int | None = None) -> Gallery:
         resolved = self.resolve_path(path)
         url = self.absolute(resolved)
         document = await self.http.get_html(url, referer=f"{self.base_url}/")
         title = text_of(document.css_first(".entry-title, h1.entry-title, h1"))
         if not title:
             raise SourceError(f"CosplayTele gallery title missing: {url}")
+        tags = self._tags(document)
+        published = attr(document.css_first("time.updated, time.entry-date"), "datetime")
         images = self._gallery_images(document)
         if not images:
             raise SourceError(f"CosplayTele gallery has no images: {url}")
-        published = attr(document.css_first("time.updated, time.entry-date"), "datetime")
-        tags = self._tags(document)
-        return Gallery(
-            source=self.id,
+        return self.make_gallery(
             title=title,
             path=resolved,
             url=url,
-            thumbnail_url=images[0],
+            images=images,
+            offset=offset,
+            limit=limit,
             tags=tags,
             published_at=published.split("T", 1)[0] if published else None,
             is_ai=looks_like_ai(title=title, path=resolved, tags=tags),
-            image_urls=images,
         )
 
     async def _parse_listing(self, url: str, page: int) -> ListingPage:
@@ -150,7 +164,11 @@ class CosplayTeleSource(GallerySource):
         return None
 
     def _from_wp_post(self, entry: dict[str, Any]) -> ListingItem:
-        return self._from_popular(entry)
+        item = self._from_popular(entry)
+        count = wp_image_count(entry, item.url)
+        if count is None:
+            return item
+        return item.model_copy(update={"image_count": count})
 
     def _from_popular(self, entry: dict[str, Any]) -> ListingItem:
         title_obj = entry.get("title") or {}
@@ -162,18 +180,26 @@ class CosplayTeleSource(GallerySource):
         thumb = None
         if media and isinstance(media[0], dict):
             thumb = media[0].get("source_url")
-        tags = []
+        tags: list[str] = []
         for group in (entry.get("_embedded") or {}).get("wp:term") or []:
             if not isinstance(group, list):
                 continue
             for term in group:
-                if isinstance(term, dict) and term.get("slug"):
-                    tags.append(str(term["slug"]))
+                if not isinstance(term, dict):
+                    continue
+                name = term.get("name") or term.get("slug")
+                if name:
+                    tags.append(str(name))
+        tags = list(dict.fromkeys(tags))
+        date = entry.get("date")
+        published = str(date).split("T", 1)[0] if date else None
         return ListingItem(
             title=title,
             path=path_of(link),
             url=link,
             thumbnail_url=thumb,
+            tags=tags,
+            published_at=published,
             is_ai=looks_like_ai(title=title, path=path_of(link), tags=tags),
         )
 

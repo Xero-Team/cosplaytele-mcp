@@ -13,6 +13,7 @@ TITLE_SUFFIX = re.compile(
     r"\s*\(\d+\s+leaked\s+photos\)\s+from\s+Onlyfans,\s+Patreon\s+and\s+Fansly\s*$",
     re.IGNORECASE,
 )
+PHOTO_COUNT = re.compile(r"\((\d+)\s+leaked\s+photos\)", re.IGNORECASE)
 DATE_PUBLISHED = re.compile(r'"datePublished"\s*:\s*"([^"]+)"')
 FILTER_TYPES = {"model", "cosplay", "fandom"}
 
@@ -23,31 +24,32 @@ class OsosedkiSource(GallerySource):
     base_url = "https://ososedki.com"
     category_names = tuple(sorted(FILTER_TYPES))
 
-    async def popular(self, page: int) -> ListingPage:
+    async def popular(self, page: int, category: str | None = None) -> ListingPage:
+        if category:
+            return await self._category_albums(category, page, query="")
         return await self._albums(page, type="top", value="1")
 
-    async def latest(self, page: int) -> ListingPage:
+    async def latest(self, page: int, category: str | None = None) -> ListingPage:
+        if category:
+            return await self._category_albums(category, page, query="")
         return await self._albums(page)
 
     async def search(
         self, query: str, page: int, category: str | None, exclude_ai: bool = True
     ) -> ListingPage:
         if category:
-            kind, _, value = category.partition(":")
-            kind = kind.strip().lower()
-            value = value.strip() or query.strip()
-            if kind not in FILTER_TYPES:
-                raise SourceError(
-                    f"OSOSEDKI category must be model:, cosplay:, or fandom:. Got {category!r}"
-                )
-            if not value:
-                raise SourceError("OSOSEDKI category search needs a value, e.g. cosplay:Genshin")
-            return await self._albums(page, type=kind, value=value)
+            return await self._category_albums(category, page, query=query)
         if query.strip():
             return await self._albums(page, type="search", value=query.strip())
         return await self.popular(page)
 
-    async def gallery(self, path: str) -> Gallery:
+    async def by_tag(self, tag: str, page: int, exclude_ai: bool = True) -> ListingPage:
+        label = tag.strip()
+        if not label:
+            raise SourceError("tag must not be blank")
+        return await self._albums(page, type="cosplay", value=label)
+
+    async def gallery(self, path: str, *, offset: int = 0, limit: int | None = None) -> Gallery:
         album_id = self._album_id(path)
         url = f"{self.base_url}/photos/{album_id}"
         document = await self.http.get_html(url, referer=f"{self.base_url}/")
@@ -60,26 +62,39 @@ class OsosedkiSource(GallerySource):
             title = TITLE_SUFFIX.sub("", raw).strip()
         if not title:
             raise SourceError(f"OSOSEDKI title missing for {album_id}")
-        images = self._images(document)
-        if not images:
-            raise SourceError(f"OSOSEDKI gallery has no images: {url}")
-        cover = f"{self.base_url}/images/albums/{album_id.replace('_', '/', 1)}.webp"
         published = None
         for script in document.css("script[type='application/ld+json']"):
             match = DATE_PUBLISHED.search(script.text() or "")
             if match:
                 published = match.group(1)
                 break
-        return Gallery(
-            source=self.id,
+        cover = f"{self.base_url}/images/albums/{album_id.replace('_', '/', 1)}.webp"
+        images = self._images(document)
+        if not images:
+            raise SourceError(f"OSOSEDKI gallery has no images: {url}")
+        return self.make_gallery(
             title=title,
             path=album_id,
             url=url,
+            images=images,
+            offset=offset,
+            limit=limit,
             thumbnail_url=cover,
             tags=list(dict.fromkeys(models + cosplays + fandoms)),
             published_at=published,
-            image_urls=images,
         )
+
+    async def _category_albums(self, category: str, page: int, query: str) -> ListingPage:
+        kind, _, value = category.partition(":")
+        kind = kind.strip().lower()
+        value = value.strip() or query.strip()
+        if kind not in FILTER_TYPES:
+            raise SourceError(
+                f"OSOSEDKI category must be model:, cosplay:, or fandom:. Got {category!r}"
+            )
+        if not value:
+            raise SourceError("OSOSEDKI category search needs a value, e.g. cosplay:Genshin")
+        return await self._albums(page, type=kind, value=value)
 
     async def _albums(
         self, page: int, type: str | None = None, value: str | None = None
@@ -110,12 +125,15 @@ class OsosedkiSource(GallerySource):
                 title = alt.split(" nude.")[0].strip()
             if not title:
                 continue
+            count_match = PHOTO_COUNT.search(title)
+            image_count = int(count_match.group(1)) if count_match else None
             items.append(
                 ListingItem(
                     title=title,
                     path=album_id,
                     url=f"{self.base_url}/photos/{album_id}",
                     thumbnail_url=img_src(node.css_first("img.gallery-img"), self.base_url),
+                    image_count=image_count,
                 )
             )
         return ListingPage(

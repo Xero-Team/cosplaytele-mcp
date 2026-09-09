@@ -5,8 +5,8 @@ from urllib.parse import quote
 
 from selectolax.parser import HTMLParser, Node
 
-from cosplaytele_mcp.htmlutil import abs_url, attr, img_src, path_of, text_of
-from cosplaytele_mcp.models import Gallery, ListingItem, ListingPage
+from cosplaytele_mcp.htmlutil import abs_url, attr, img_src, path_of, slugify, text_of
+from cosplaytele_mcp.models import Gallery, ListingItem, ListingPage, needed_images
 from cosplaytele_mcp.sources.base import GallerySource, SourceError
 
 HD_PATH = re.compile(r"(/p=\d+x?\d*/)")
@@ -17,10 +17,14 @@ class HentaiCosplaySource(GallerySource):
     name = "Hentai Cosplay"
     base_url = "https://hentai-cosplay-xxx.com"
 
-    async def popular(self, page: int) -> ListingPage:
+    async def popular(self, page: int, category: str | None = None) -> ListingPage:
+        if category:
+            return await self._category_listing(category, page)
         return await self._parse_listing(f"{self.base_url}/ranking/page/{page}/", page)
 
-    async def latest(self, page: int) -> ListingPage:
+    async def latest(self, page: int, category: str | None = None) -> ListingPage:
+        if category:
+            return await self._category_listing(category, page)
         return await self._parse_listing(f"{self.base_url}/search/page/{page}/", page)
 
     async def search(
@@ -32,15 +36,17 @@ class HentaiCosplaySource(GallerySource):
                 f"{self.base_url}/search/keyword/{keyword}/page/{page}/", page
             )
         if category:
-            slug = category.strip().strip("/")
-            if not slug.startswith("/"):
-                slug = f"/{slug}"
-            if not slug.endswith("/"):
-                slug = f"{slug}/"
-            return await self._parse_listing(f"{self.base_url}{slug}page/{page}/", page)
+            return await self._category_listing(category, page)
         return await self.latest(page)
 
-    async def gallery(self, path: str) -> Gallery:
+    async def by_tag(self, tag: str, page: int, exclude_ai: bool = True) -> ListingPage:
+        slug = slugify(tag)
+        if not slug:
+            raise SourceError("tag must not be blank")
+        encoded = quote(slug, safe="-")
+        return await self._parse_listing(f"{self.base_url}/tag/{encoded}/page/{page}/", page)
+
+    async def gallery(self, path: str, *, offset: int = 0, limit: int | None = None) -> Gallery:
         resolved = self.resolve_path(path)
         details_url = self.absolute(resolved)
         document = await self.http.get_html(details_url, referer=f"{self.base_url}/")
@@ -50,21 +56,42 @@ class HentaiCosplaySource(GallerySource):
         tags = [
             text_of(node) for node in document.css("#detail_tag a[href*='/tag/']") if text_of(node)
         ]
+        budget = needed_images(offset, limit)
+        if budget == 0:
+            return self.make_gallery(
+                title=title,
+                path=resolved,
+                url=details_url,
+                images=[],
+                offset=offset,
+                limit=limit,
+                complete=False,
+                has_more=True,
+                tags=tags,
+            )
         story_path = resolved.replace("/image/", "/story/")
         story_url = self.absolute(story_path)
         story = await self.http.get_html(story_url, referer=details_url)
         images = self._page_images(story)
         if not images:
             raise SourceError(f"Hentai Cosplay gallery has no images: {story_url}")
-        return Gallery(
-            source=self.id,
+        return self.make_gallery(
             title=title,
             path=resolved,
             url=details_url,
-            thumbnail_url=images[0],
+            images=images,
+            offset=offset,
+            limit=limit,
             tags=tags,
-            image_urls=images,
         )
+
+    async def _category_listing(self, category: str, page: int) -> ListingPage:
+        slug = category.strip().strip("/")
+        if not slug.startswith("/"):
+            slug = f"/{slug}"
+        if not slug.endswith("/"):
+            slug = f"{slug}/"
+        return await self._parse_listing(f"{self.base_url}{slug}page/{page}/", page)
 
     async def _parse_listing(self, url: str, page: int) -> ListingPage:
         document = await self.http.get_html(url, referer=f"{self.base_url}/")
@@ -106,9 +133,11 @@ class HentaiCosplaySource(GallerySource):
     def _mobile_item(self, node: Node) -> ListingItem | None:
         href = abs_url(self.base_url, attr(node, "href"))
         title = ""
+        published = None
         for span in node.css("span"):
             classes = span.attributes.get("class") or ""
             if "posted" in classes.split():
+                published = text_of(span).replace("/", "-") or None
                 continue
             title = text_of(span)
             if title:
@@ -120,7 +149,13 @@ class HentaiCosplaySource(GallerySource):
         thumb = img_src(node.css_first("img"), self.base_url)
         if thumb:
             thumb = thumb.replace("http://", "https://")
-        return ListingItem(title=title, path=path_of(href), url=href, thumbnail_url=thumb)
+        return ListingItem(
+            title=title,
+            path=path_of(href),
+            url=href,
+            thumbnail_url=thumb,
+            published_at=published,
+        )
 
     def _page_images(self, document: HTMLParser) -> list[str]:
         urls: list[str] = []

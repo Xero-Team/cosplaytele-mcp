@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import re
 from html import unescape
 from urllib.parse import urljoin, urlparse
 
 from selectolax.parser import Node
+
+SLUG_STRIP_RE = re.compile(r"[^\w\s-]", re.UNICODE)
+SLUG_DASH_RE = re.compile(r"[-\s]+")
 
 
 def abs_url(base: str, value: str | None) -> str | None:
@@ -52,6 +56,16 @@ def path_of(url: str) -> str:
     if not path.startswith("/"):
         path = f"/{path}"
     return path
+
+
+def host_key(url: str) -> str:
+    return (urlparse(url).hostname or "").lower().removeprefix("www.")
+
+
+def slugify(value: str) -> str:
+    text = unescape(value).strip().lower()
+    text = SLUG_STRIP_RE.sub("", text)
+    return SLUG_DASH_RE.sub("-", text).strip("-")
 
 
 def normalize_path(path: str, base_url: str) -> str:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from cosplaytele_mcp.htmlutil import host_key
 from cosplaytele_mcp.http import Http
 from cosplaytele_mcp.models import SourceId
 from cosplaytele_mcp.sources.base import GallerySource, SourceError
@@ -29,6 +30,8 @@ SOURCE_TYPES = (
     MitakuSource,
 )
 
+HOST_TO_SOURCE = {host_key(cls.base_url): cls.id for cls in SOURCE_TYPES}
+
 
 class SourceRegistry:
     def __init__(self, http: Http) -> None:
@@ -42,6 +45,16 @@ class SourceRegistry:
 
     def all(self) -> list[GallerySource]:
         return list(self._sources.values())
+
+    def by_url(self, url: str) -> GallerySource:
+        host = host_key(url)
+        if not host:
+            raise SourceError(f"Not a gallery URL: {url}")
+        source_id = HOST_TO_SOURCE.get(host)
+        if source_id is None:
+            known = ", ".join(sorted({host_key(cls.base_url) for cls in SOURCE_TYPES}))
+            raise SourceError(f"No source for host {host!r}. Known hosts: {known}")
+        return self.get(source_id)
 
 
 __all__ = ["GallerySource", "SourceError", "SourceRegistry"]

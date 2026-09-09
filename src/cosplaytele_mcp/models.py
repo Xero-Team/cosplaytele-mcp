@@ -20,6 +20,9 @@ SourceId = Literal[
 
 BrowseSort = Literal["popular", "latest"]
 
+DEFAULT_IMAGE_LIMIT = 20
+MAX_IMAGE_LIMIT = 100
+
 
 class SourceInfo(BaseModel):
     id: SourceId
@@ -39,6 +42,9 @@ class ListingItem(BaseModel):
     url: str
     thumbnail_url: str | None = None
     is_ai: bool = False
+    tags: list[str] = Field(default_factory=list)
+    published_at: str | None = None
+    image_count: int | None = None
 
 
 class ListingPage(BaseModel):
@@ -48,13 +54,8 @@ class ListingPage(BaseModel):
     items: list[ListingItem]
 
 
-class SearchHit(BaseModel):
+class SearchHit(ListingItem):
     source: SourceId
-    title: str
-    path: str = Field(description="Source-relative path. Pass this to get_gallery.")
-    url: str
-    thumbnail_url: str | None = None
-    is_ai: bool = False
 
 
 class SearchPage(BaseModel):
@@ -77,4 +78,49 @@ class Gallery(BaseModel):
     tags: list[str] = Field(default_factory=list)
     published_at: str | None = None
     is_ai: bool = False
-    image_urls: list[str] = Field(description="Direct image URLs. Do not download binaries.")
+    image_count: int | None = Field(
+        default=None,
+        description="Total images if known. Null when the source was not fully scanned.",
+    )
+    image_offset: int = 0
+    has_more_images: bool = False
+    image_urls: list[str] = Field(
+        description="Direct image URLs for this window. Do not download binaries."
+    )
+
+
+def needed_images(offset: int, limit: int | None) -> int | None:
+    if limit is None:
+        return None
+    if limit <= 0:
+        return 0
+    return max(offset, 0) + limit
+
+
+def window_images(
+    urls: list[str],
+    *,
+    offset: int = 0,
+    limit: int | None = None,
+    complete: bool = True,
+    total: int | None = None,
+    has_more: bool | None = None,
+) -> tuple[list[str], int | None, int, bool]:
+    offset = max(offset, 0)
+    collected = len(urls)
+    if complete or has_more is False:
+        total = collected
+    if limit is None:
+        sliced = urls[offset:]
+    elif limit <= 0:
+        sliced = []
+    else:
+        sliced = urls[offset : offset + limit]
+    end = offset + len(sliced)
+    if total is not None:
+        more = end < total
+    elif has_more:
+        more = True
+    else:
+        more = end < collected
+    return sliced, total, offset, more

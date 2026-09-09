@@ -42,7 +42,10 @@ def apply_ai_filter(page: ListingPage, exclude_ai: bool) -> ListingPage:
     items = []
     for item in page.items:
         flagged = item.model_copy(
-            update={"is_ai": item.is_ai or looks_like_ai(title=item.title, path=item.path)},
+            update={
+                "is_ai": item.is_ai
+                or looks_like_ai(title=item.title, path=item.path, tags=item.tags),
+            },
         )
         if exclude_ai and flagged.is_ai:
             continue

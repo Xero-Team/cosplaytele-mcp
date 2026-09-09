@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 
-from cosplaytele_mcp.htmlutil import abs_url, attr, img_src, path_of, text_of
+from cosplaytele_mcp.htmlutil import abs_url, attr, img_src, path_of, slugify, text_of
 from cosplaytele_mcp.models import Gallery, ListingItem, ListingPage
 from cosplaytele_mcp.sources.base import GallerySource, SourceError
 from cosplaytele_mcp.wordpress import images_from_html
@@ -15,7 +15,7 @@ class Beauty3600000Source(GallerySource):
     supports_latest = False
     category_names = ("cosplay",)
 
-    async def popular(self, page: int) -> ListingPage:
+    async def popular(self, page: int, category: str | None = None) -> ListingPage:
         suffix = f"/category/cosplay/page/{page}/" if page > 1 else "/category/cosplay/"
         return await self._listing(f"{self.base_url}{suffix}", page)
 
@@ -28,28 +28,36 @@ class Beauty3600000Source(GallerySource):
         url = f"{self.base_url}{path}?{urlencode({'s': query.strip()})}"
         return await self._listing(url, page)
 
-    async def gallery(self, path: str) -> Gallery:
+    async def by_tag(self, tag: str, page: int, exclude_ai: bool = True) -> ListingPage:
+        slug = slugify(tag)
+        if not slug:
+            raise SourceError("tag must not be blank")
+        encoded = quote(slug, safe="-")
+        suffix = f"/tag/{encoded}/page/{page}/" if page > 1 else f"/tag/{encoded}/"
+        return await self._listing(f"{self.base_url}{suffix}", page)
+
+    async def gallery(self, path: str, *, offset: int = 0, limit: int | None = None) -> Gallery:
         resolved = self.resolve_path(path)
         url = self.absolute(resolved)
         document = await self.http.get_html(url, referer=f"{self.base_url}/")
         title = text_of(document.css_first("h1.entry-title, .entry-title, h1"))
         if not title:
             raise SourceError(f"3600000 title missing: {url}")
+        tags = [text_of(node) for node in document.css("a[rel=tag]") if text_of(node)]
         content = document.css_first(".entry-content, article")
         html = content.html if content is not None else document.html or ""
         images = images_from_html(html, self.base_url)
         images = [src for src in images if "gravatar" not in src]
         if not images:
             raise SourceError(f"3600000 gallery has no images: {url}")
-        tags = [text_of(node) for node in document.css("a[rel=tag]") if text_of(node)]
-        return Gallery(
-            source=self.id,
+        return self.make_gallery(
             title=title,
             path=resolved,
             url=url,
-            thumbnail_url=images[0],
+            images=images,
+            offset=offset,
+            limit=limit,
             tags=tags,
-            image_urls=images,
         )
 
     async def _listing(self, url: str, page: int) -> ListingPage:

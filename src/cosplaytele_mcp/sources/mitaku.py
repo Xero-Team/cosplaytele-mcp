@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 
 from selectolax.parser import HTMLParser
 
-from cosplaytele_mcp.htmlutil import abs_url, attr, img_src, path_of, text_of
+from cosplaytele_mcp.htmlutil import abs_url, attr, img_src, path_of, slugify, text_of
 from cosplaytele_mcp.models import Gallery, ListingItem, ListingPage
 from cosplaytele_mcp.sources.base import GallerySource, SourceError
 
@@ -23,9 +23,17 @@ class MitakuSource(GallerySource):
     supports_latest = False
     category_names = tuple(CATEGORIES)
 
-    async def popular(self, page: int) -> ListingPage:
+    async def popular(self, page: int, category: str | None = None) -> ListingPage:
+        slug = CATEGORIES.get((category or "ero-cosplay").strip().lower(), "ero-cosplay")
+        if category:
+            mapped = CATEGORIES.get(category.strip().lower())
+            if not mapped:
+                raise SourceError(
+                    f"Unknown Mitaku category {category!r}. Use one of: {', '.join(CATEGORIES)}"
+                )
+            slug = mapped
         return await self._parse_listing(
-            f"{self.base_url}/category/ero-cosplay/page/{page}/",
+            f"{self.base_url}/category/{slug}/page/{page}/",
             page,
         )
 
@@ -36,15 +44,17 @@ class MitakuSource(GallerySource):
             url = f"{self.base_url}/page/{page}/?{urlencode({'s': query.strip()})}"
             return await self._parse_listing(url, page)
         if category:
-            slug = CATEGORIES.get(category.strip().lower())
-            if not slug:
-                raise SourceError(
-                    f"Unknown Mitaku category {category!r}. Use one of: {', '.join(CATEGORIES)}"
-                )
-            return await self._parse_listing(f"{self.base_url}/category/{slug}/page/{page}/", page)
+            return await self.popular(page, category)
         return await self.popular(page)
 
-    async def gallery(self, path: str) -> Gallery:
+    async def by_tag(self, tag: str, page: int, exclude_ai: bool = True) -> ListingPage:
+        slug = slugify(tag)
+        if not slug:
+            raise SourceError("tag must not be blank")
+        encoded = quote(slug, safe="-")
+        return await self._parse_listing(f"{self.base_url}/tag/{encoded}/page/{page}/", page)
+
+    async def gallery(self, path: str, *, offset: int = 0, limit: int | None = None) -> Gallery:
         resolved = self.resolve_path(path)
         url = self.absolute(resolved)
         document = await self.http.get_html(url, referer=f"{self.base_url}/")
@@ -62,14 +72,14 @@ class MitakuSource(GallerySource):
         images = self._images(document)
         if not images:
             raise SourceError(f"Mitaku gallery has no images (video-only posts have none): {url}")
-        return Gallery(
-            source=self.id,
+        return self.make_gallery(
             title=title,
             path=resolved,
             url=url,
-            thumbnail_url=images[0],
+            images=images,
+            offset=offset,
+            limit=limit,
             tags=tags,
-            image_urls=images,
         )
 
     async def _parse_listing(self, url: str, page: int) -> ListingPage:

@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 
 from selectolax.parser import HTMLParser
 
-from cosplaytele_mcp.htmlutil import abs_url, attr, img_src, path_of, text_of
-from cosplaytele_mcp.models import Gallery, ListingItem, ListingPage
+from cosplaytele_mcp.htmlutil import abs_url, attr, img_src, path_of, slugify, text_of
+from cosplaytele_mcp.models import Gallery, ListingItem, ListingPage, needed_images
 from cosplaytele_mcp.sources.base import GallerySource, SourceError
 
 
@@ -15,12 +15,12 @@ class MissKonSource(GallerySource):
     base_url = "https://misskon.com"
     category_names = ("cosplay",)
 
-    async def popular(self, page: int) -> ListingPage:
-        return await self.latest(page)
+    async def popular(self, page: int, category: str | None = None) -> ListingPage:
+        return await self.latest(page, category)
 
-    async def latest(self, page: int) -> ListingPage:
-        suffix = f"/tag/cosplay/page/{page}/" if page > 1 else "/tag/cosplay/"
-        return await self._listing(f"{self.base_url}{suffix}", page)
+    async def latest(self, page: int, category: str | None = None) -> ListingPage:
+        slug = slugify(category) if category else "cosplay"
+        return await self._tag_listing(slug, page)
 
     async def search(
         self, query: str, page: int, category: str | None, exclude_ai: bool = True
@@ -28,9 +28,15 @@ class MissKonSource(GallerySource):
         if query.strip():
             url = f"{self.base_url}/page/{page}/?{urlencode({'s': query.strip()})}"
             return await self._listing(url, page)
-        return await self.latest(page)
+        return await self.latest(page, category)
 
-    async def gallery(self, path: str) -> Gallery:
+    async def by_tag(self, tag: str, page: int, exclude_ai: bool = True) -> ListingPage:
+        slug = slugify(tag)
+        if not slug:
+            raise SourceError("tag must not be blank")
+        return await self._tag_listing(slug, page)
+
+    async def gallery(self, path: str, *, offset: int = 0, limit: int | None = None) -> Gallery:
         resolved = self.resolve_path(path)
         url = self.absolute(resolved)
         first = await self.http.get_html(url, referer=f"{self.base_url}/")
@@ -38,6 +44,19 @@ class MissKonSource(GallerySource):
         if not title:
             raise SourceError(f"MissKon title missing: {url}")
         tags = [text_of(node) for node in first.css(".post-tag > a") if text_of(node)]
+        budget = needed_images(offset, limit)
+        if budget == 0:
+            return self.make_gallery(
+                title=title,
+                path=resolved,
+                url=url,
+                images=[],
+                offset=offset,
+                limit=limit,
+                complete=False,
+                has_more=True,
+                tags=tags,
+            )
         max_page = 1
         numbers = first.css("div.page-link a.post-page-numbers")
         if numbers:
@@ -45,7 +64,11 @@ class MissKonSource(GallerySource):
             if last.isdigit():
                 max_page = int(last)
         images: list[str] = []
+        stopped = False
         for page in range(1, max_page + 1):
+            if budget is not None and len(images) >= budget:
+                stopped = True
+                break
             document = (
                 first
                 if page == 1
@@ -58,15 +81,22 @@ class MissKonSource(GallerySource):
         images = list(dict.fromkeys(images))
         if not images:
             raise SourceError(f"MissKon gallery has no images: {url}")
-        return Gallery(
-            source=self.id,
+        return self.make_gallery(
             title=title,
             path=resolved,
             url=url,
-            thumbnail_url=images[0],
+            images=images,
+            offset=offset,
+            limit=limit,
+            complete=not stopped,
+            has_more=stopped,
             tags=tags,
-            image_urls=images,
         )
+
+    async def _tag_listing(self, slug: str, page: int) -> ListingPage:
+        encoded = quote(slug, safe="-")
+        suffix = f"/tag/{encoded}/page/{page}/" if page > 1 else f"/tag/{encoded}/"
+        return await self._listing(f"{self.base_url}{suffix}", page)
 
     async def _listing(self, url: str, page: int) -> ListingPage:
         document = await self.http.get_html(url, referer=f"{self.base_url}/")
