@@ -81,6 +81,16 @@ uvx cosplaytele-mcp --transport streamable-http --port 8000
 cosplaytele-mcp --transport streamable-http --host 127.0.0.1 --port 8000
 ```
 
+对外绑定时必须显式列出可信的浏览器 Origin：
+
+```bash
+cosplaytele-mcp --transport streamable-http --host 0.0.0.0 --port 8000 \
+  --allowed-origin https://mcp.example.com
+```
+
+`popular_kind=archive` 表示源站的分类或默认归档，不表示按统计热度排名。`ranking_kinds`
+与内容 `categories` 分开列出。
+
 ## 源
 
 | id | 站点 | 热门 | 最新 | 搜索 |

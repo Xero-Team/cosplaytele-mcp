@@ -1,8 +1,10 @@
+import asyncio
+
 import pytest
 from mcp import Client
 from mcp.types import PromptReference, ResourceTemplateReference, TextContent
 
-from cosplaytele_mcp.models import ListingItem, ListingPage, SourceId
+from cosplaytele_mcp.models import Gallery, ListingItem, ListingPage, SourceId
 from cosplaytele_mcp.server import mcp
 from cosplaytele_mcp.sources import SourceError
 
@@ -11,16 +13,31 @@ class StubSearchSource:
     supports_search = True
     category_names: tuple[str, ...] = ()
 
-    def __init__(self, source_id: SourceId, outcome: ListingPage | Exception) -> None:
+    def __init__(
+        self, source_id: SourceId, outcome: ListingPage | Exception, *, delay: float = 0
+    ) -> None:
         self.id = source_id
         self.outcome = outcome
+        self.delay = delay
 
     async def search(
         self, query: str, page: int, category: str | None, *, exclude_ai: bool
     ) -> ListingPage:
+        if self.delay:
+            await asyncio.sleep(self.delay)
         if isinstance(self.outcome, Exception):
             raise self.outcome
         return self.outcome
+
+    async def gallery(self, path: str, *, offset: int = 0, limit: int | None = None) -> Gallery:
+        return Gallery(
+            source=self.id,
+            title="Probe",
+            path=path,
+            url=f"https://example.com{path}",
+            image_urls=["https://example.com/probe.webp"],
+            image_count=1,
+        )
 
 
 class StubSearchRegistry:
@@ -155,7 +172,85 @@ async def test_search_keeps_successful_sources_when_one_fails(
     assert payload is not None
     assert payload["has_next_page"] is True
     assert [item["title"] for item in payload["items"]] == ["Miku"]
-    assert payload["errors"] == ["hentaicosplay: upstream unavailable"]
+    assert payload["successful_sources"] == ["cosplaytele"]
+    assert payload["errors"] == [
+        {
+            "source": "hentaicosplay",
+            "code": "upstream_error",
+            "retryable": False,
+            "message": "upstream unavailable",
+        }
+    ]
+
+
+@pytest.mark.anyio
+async def test_search_preserves_source_specific_categories(monkeypatch: pytest.MonkeyPatch) -> None:
+    source = StubSearchSource("cosplaytele", search_page("cosplaytele", "Miku"))
+    source.category_names = ("cosplay",)
+    seen: dict[str, str | None] = {}
+    original_search = source.search
+
+    async def record_category(
+        query: str, page: int, category: str | None, *, exclude_ai: bool
+    ) -> ListingPage:
+        seen["category"] = category
+        return await original_search(query, page, category, exclude_ai=exclude_ai)
+
+    source.search = record_category  # type: ignore[method-assign]
+    registry = StubSearchRegistry([source])
+    monkeypatch.setattr("cosplaytele_mcp.server.SourceRegistry", lambda http: registry)
+    async with Client(mcp, raise_exceptions=True) as connected:
+        result = await connected.call_tool(
+            "search", {"query": "miku", "source": "cosplaytele", "category": "byoru"}
+        )
+    assert result.is_error is not True
+    assert seen["category"] == "byoru"
+
+
+@pytest.mark.anyio
+async def test_search_returns_an_error_when_every_source_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry = StubSearchRegistry([StubSearchSource("cosplaytele", SourceError("unavailable"))])
+    monkeypatch.setattr("cosplaytele_mcp.server.SourceRegistry", lambda http: registry)
+    async with Client(mcp, raise_exceptions=True) as connected:
+        result = await connected.call_tool("search", {"query": "miku", "source": "all"})
+    assert result.is_error is True
+    assert "All selected sources failed" in result.content[0].text
+
+
+@pytest.mark.anyio
+async def test_search_keeps_completed_results_when_total_budget_expires(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry = StubSearchRegistry(
+        [
+            StubSearchSource("cosplaytele", search_page("cosplaytele", "Miku")),
+            StubSearchSource("hentaicosplay", search_page("hentaicosplay", "Slow"), delay=1),
+        ]
+    )
+    monkeypatch.setattr("cosplaytele_mcp.server.SourceRegistry", lambda http: registry)
+    monkeypatch.setattr("cosplaytele_mcp.server.SEARCH_TOTAL_TIMEOUT", 0.01)
+    async with Client(mcp, raise_exceptions=True) as connected:
+        result = await connected.call_tool("search", {"query": "miku", "source": "all"})
+    assert result.is_error is not True
+    payload = result.structured_content
+    assert payload is not None
+    assert [item["title"] for item in payload["items"]] == ["Miku"]
+    assert payload["errors"][0]["code"] == "timeout"
+    assert "timed out" in payload["errors"][0]["message"]
+
+
+@pytest.mark.anyio
+async def test_gallery_resource_can_be_read(monkeypatch: pytest.MonkeyPatch) -> None:
+    registry = StubSearchRegistry(
+        [StubSearchSource("cosplaytele", search_page("cosplaytele", "Miku"))]
+    )
+    monkeypatch.setattr("cosplaytele_mcp.server.SourceRegistry", lambda http: registry)
+    async with Client(mcp, raise_exceptions=True) as connected:
+        resource = await connected.read_resource("gallery://cosplaytele/probe/")
+    assert resource.contents[0].text is not None
+    assert "Probe" in resource.contents[0].text
 
 
 @pytest.mark.anyio
@@ -219,6 +314,28 @@ def test_main_help(capsys: pytest.CaptureFixture[str]) -> None:
     output = capsys.readouterr().out
     assert "--transport" in output
     assert "streamable-http" in output
+
+
+def test_main_configures_streamable_http_origin_protection(monkeypatch: pytest.MonkeyPatch) -> None:
+    from cosplaytele_mcp import server
+
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(server.mcp, "run", lambda **kwargs: captured.update(kwargs))
+    server.main(
+        [
+            "--transport",
+            "streamable-http",
+            "--host",
+            "0.0.0.0",
+            "--port",
+            "8080",
+            "--allowed-origin",
+            "https://mcp.example.com",
+        ]
+    )
+    settings = captured["transport_security"]
+    assert settings.allowed_hosts == ["0.0.0.0:8080"]
+    assert settings.allowed_origins == ["https://mcp.example.com"]
 
 
 def test_package_version() -> None:

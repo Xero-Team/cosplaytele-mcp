@@ -19,6 +19,7 @@ SourceId = Literal[
 ]
 
 BrowseSort = Literal["popular", "latest"]
+ListingKind = Literal["gallery", "directory"]
 
 DEFAULT_IMAGE_LIMIT = 20
 MAX_IMAGE_LIMIT = 100
@@ -31,6 +32,14 @@ class SourceInfo(BaseModel):
     supports_popular: bool = True
     supports_latest: bool
     supports_search: bool
+    popular_kind: Literal["ranking", "archive", "featured"] = Field(
+        default="ranking",
+        description="Meaning of popular; archive is a category/default listing, not a measured rank.",
+    )
+    ranking_kinds: list[str] = Field(
+        default_factory=list,
+        description="Source-specific popular/ranking selectors, distinct from content categories.",
+    )
     categories: list[str] = Field(
         default_factory=list,
         description="Category slugs accepted by browse/search on this source.",
@@ -38,6 +47,10 @@ class SourceInfo(BaseModel):
 
 
 class ListingItem(BaseModel):
+    kind: ListingKind = Field(
+        default="gallery",
+        description="gallery paths can be opened with get_gallery; directory paths need another browse call.",
+    )
     title: str
     path: str = Field(description="Source-relative path. Pass this to get_gallery.")
     url: str
@@ -60,12 +73,20 @@ class SearchHit(ListingItem):
     source: SourceId
 
 
+class SourceFailure(BaseModel):
+    source: SourceId
+    code: str = Field(description="Stable failure category, such as timeout or upstream_error.")
+    retryable: bool
+    message: str
+
+
 class SearchPage(BaseModel):
     query: str
     page: int
     has_next_page: bool = Field(description="True if at least one source has another page.")
     items: list[SearchHit]
-    errors: list[str] = Field(
+    successful_sources: list[SourceId] = Field(default_factory=list)
+    errors: list[SourceFailure] = Field(
         default_factory=list,
         description="Per-source failures when searching all sources. Empty on a single-source call.",
     )

@@ -12,6 +12,7 @@ import httpx
 from mcp.server import CacheHint, MCPServer
 from mcp.server.mcpserver import Context
 from mcp.server.mcpserver.exceptions import ResourceError, ResourceNotFoundError, ToolError
+from mcp.server.transport_security import TransportSecuritySettings
 from mcp.types import (
     Completion,
     CompletionArgument,
@@ -23,7 +24,13 @@ from mcp.types import (
 from pydantic import Field
 
 from cosplaytele_mcp.ai import apply_ai_filter, looks_like_ai
-from cosplaytele_mcp.http import DEFAULT_HEADERS, HTTP_LIMITS, HTTP_TIMEOUT, Http, describe_error
+from cosplaytele_mcp.http import (
+    DEFAULT_HEADERS,
+    HTTP_LIMITS,
+    HTTP_TIMEOUT,
+    Http,
+    describe_error,
+)
 from cosplaytele_mcp.models import (
     DEFAULT_IMAGE_LIMIT,
     MAX_IMAGE_LIMIT,
@@ -33,6 +40,7 @@ from cosplaytele_mcp.models import (
     ListingPage,
     SearchHit,
     SearchPage,
+    SourceFailure,
     SourceId,
     SourceInfo,
 )
@@ -43,6 +51,8 @@ from cosplaytele_mcp.version import __version__
 logger = logging.getLogger(__name__)
 
 SEARCH_CONCURRENCY = 6
+SOURCE_SEARCH_TIMEOUT = 35.0
+SEARCH_TOTAL_TIMEOUT = 45.0
 SOURCE_IDS: tuple[str, ...] = tuple(cls.id for cls in SOURCE_TYPES)
 SOURCE_CHOICES = (*SOURCE_IDS, "all")
 
@@ -81,11 +91,11 @@ class AppContext:
 async def app_lifespan(server: MCPServer) -> AsyncIterator[AppContext]:
     async with httpx.AsyncClient(
         headers=DEFAULT_HEADERS,
-        follow_redirects=True,
+        follow_redirects=False,
         timeout=HTTP_TIMEOUT,
         limits=HTTP_LIMITS,
     ) as client:
-        http = Http(client)
+        http = Http(client, allowed_hosts=tuple(cls.base_url for cls in SOURCE_TYPES))
         yield AppContext(http=http, sources=SourceRegistry(http))
 
 
@@ -105,8 +115,9 @@ mcp = MCPServer(
 )
 
 
-def _registry(ctx: Context[AppContext]) -> SourceRegistry:
-    return ctx.request_context.lifespan_context.sources
+def _registry(ctx: Context[AppContext] | Context) -> SourceRegistry:
+    app_context = cast(AppContext, ctx.request_context.lifespan_context)
+    return app_context.sources
 
 
 def _blank_to_none(value: str | None) -> str | None:
@@ -143,6 +154,8 @@ def _source_catalog() -> list[SourceInfo]:
             supports_popular=cls.supports_popular,
             supports_latest=cls.supports_latest,
             supports_search=cls.supports_search,
+            popular_kind=cls.popular_kind,
+            ranking_kinds=list(cls.ranking_kinds),
             categories=list(cls.category_names),
         )
         for cls in SOURCE_TYPES
@@ -247,6 +260,8 @@ async def browse(
                 )
             page_result = await site.latest(page, category)
         else:
+            if period and source not in {"cosplaytele", "hentaicosplay"}:
+                raise ToolError(f"{site.name} ({source}) does not support ranking periods.")
             if not site.supports_popular:
                 raise ToolError(
                     f"{site.name} ({source}) does not support popular listings. "
@@ -279,7 +294,9 @@ async def search(
     page: Annotated[int, Field(ge=1, le=100, description="1-based page index.")] = 1,
     category: Annotated[
         str | None,
-        Field(description="Optional category slug. Applied only on sources that list it."),
+        Field(
+            description="Optional source-specific category filter. Unsupported sources report an error."
+        ),
     ] = None,
     exclude_ai: Annotated[bool, Field(description="Drop AI Art / AI Generated listings.")] = True,
 ) -> SearchPage:
@@ -305,41 +322,97 @@ async def search(
     async def run(site: GallerySource) -> tuple[GallerySource, ListingPage | Exception]:
         try:
             async with semaphore:
-                return site, await _search_site(site, query, page, category, exclude_ai)
+                return site, await asyncio.wait_for(
+                    _search_site(site, query, page, category, exclude_ai),
+                    timeout=SOURCE_SEARCH_TIMEOUT,
+                )
+        except asyncio.TimeoutError:
+            return site, SourceError(f"search timed out after {SOURCE_SEARCH_TIMEOUT:g}s")
         except Exception as exc:
             return site, exc
 
     tasks = [asyncio.create_task(run(site)) for site in sites]
+    task_sites = dict(zip(tasks, sites, strict=True))
     grouped: dict[str, list[SearchHit]] = {site.id: [] for site in sites}
-    errors: list[str] = []
+    errors: list[SourceFailure] = []
+    successful_sources: list[SourceId] = []
     has_next = False
     finished = 0
+    pending = set(tasks)
+
+    async def record(site: GallerySource, outcome: ListingPage | Exception) -> None:
+        nonlocal finished, has_next
+        finished += 1
+        await ctx.report_progress(finished, total=len(tasks), message=site.id)
+        if isinstance(outcome, Exception):
+            if source != "all":
+                raise _as_tool_error(outcome) from outcome
+            detail = str(outcome) if isinstance(outcome, SourceError) else describe_error(outcome)
+            logger.warning("search failed for %s: %s", site.id, detail)
+            errors.append(_source_failure(site.id, outcome, detail))
+            return
+        result = outcome
+        successful_sources.append(result.source)
+        has_next = has_next or result.has_next_page
+        grouped[result.source] = [
+            _hit_from_item(result.source, item)
+            for item in apply_ai_filter(result, exclude_ai).items
+        ]
+
     try:
-        for fut in asyncio.as_completed(tasks):
-            site, outcome = await fut
-            finished += 1
-            await ctx.report_progress(finished, total=len(tasks), message=site.id)
-            if isinstance(outcome, Exception):
-                if source != "all":
-                    raise _as_tool_error(outcome) from outcome
-                detail = (
-                    str(outcome) if isinstance(outcome, SourceError) else describe_error(outcome)
-                )
-                logger.warning("search failed for %s: %s", site.id, detail)
-                errors.append(f"{site.id}: {detail}")
-                continue
-            result = outcome
-            has_next = has_next or result.has_next_page
-            grouped[result.source] = [
-                _hit_from_item(result.source, item)
-                for item in apply_ai_filter(result, exclude_ai).items
-            ]
+        deadline = asyncio.get_running_loop().time() + SEARCH_TOTAL_TIMEOUT
+        while pending:
+            remaining = deadline - asyncio.get_running_loop().time()
+            if remaining <= 0:
+                break
+            done, pending = await asyncio.wait(
+                pending, timeout=remaining, return_when=asyncio.FIRST_COMPLETED
+            )
+            if not done:
+                break
+            for task in done:
+                site, outcome = task.result()
+                await record(site, outcome)
+        if pending:
+            for task in pending:
+                task.cancel()
+            await asyncio.gather(*pending, return_exceptions=True)
+            for task in pending:
+                site = task_sites[task]
+                await record(site, SourceError(f"search timed out after {SEARCH_TOTAL_TIMEOUT:g}s"))
     except BaseException:
         for task in tasks:
             task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
         raise
+    if not successful_sources:
+        summary = "; ".join(f"{error.source}: {error.message}" for error in errors)
+        raise ToolError(f"All selected sources failed. {summary}")
     items = interleave_hits([grouped[site.id] for site in sites])
-    return SearchPage(query=query, page=page, has_next_page=has_next, items=items, errors=errors)
+    return SearchPage(
+        query=query,
+        page=page,
+        has_next_page=has_next,
+        items=items,
+        successful_sources=successful_sources,
+        errors=errors,
+    )
+
+
+def _source_failure(source: SourceId, exc: Exception, detail: str) -> SourceFailure:
+    if (
+        isinstance(exc, (asyncio.TimeoutError, httpx.TimeoutException))
+        or "timed out" in detail.lower()
+    ):
+        return SourceFailure(source=source, code="timeout", retryable=True, message=detail)
+    if isinstance(exc, httpx.HTTPStatusError):
+        return SourceFailure(
+            source=source,
+            code=f"http_{exc.response.status_code}",
+            retryable=exc.response.status_code >= 500 or exc.response.status_code == 429,
+            message=detail,
+        )
+    return SourceFailure(source=source, code="upstream_error", retryable=False, message=detail)
 
 
 async def _search_site(
@@ -349,11 +422,8 @@ async def _search_site(
     category: str | None,
     exclude_ai: bool,
 ) -> ListingPage:
-    site_category = category
-    if category and site.category_names and category not in site.category_names:
-        site_category = None
     try:
-        return await site.search(query, page, site_category, exclude_ai=exclude_ai)
+        return await site.search(query, page, category, exclude_ai=exclude_ai)
     except (SourceError, httpx.HTTPError):
         raise
     except Exception as exc:
@@ -502,7 +572,7 @@ def sources_catalog() -> list[SourceInfo]:
 
 
 @mcp.resource("gallery://{source}/{+path}", mime_type="application/json", title="Gallery")
-async def gallery_resource(source: str, path: str, ctx: Context[AppContext]) -> Gallery:
+async def gallery_resource(source: str, path: str, ctx: Context) -> Gallery:
     """One gallery addressed as gallery://<source>/<path>."""
     if source not in SOURCE_IDS:
         raise ResourceNotFoundError(f"Unknown source {source!r}")
@@ -513,7 +583,11 @@ async def gallery_resource(source: str, path: str, ctx: Context[AppContext]) -> 
             .gallery(path, offset=0, limit=DEFAULT_IMAGE_LIMIT)
         )
     except SourceError as exc:
-        raise ResourceNotFoundError(str(exc)) from exc
+        raise ResourceError(f"Gallery could not be parsed: {exc}") from exc
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code == 404:
+            raise ResourceNotFoundError(f"Gallery not found: {path}") from exc
+        raise ResourceError(f"HTTP request failed: {describe_error(exc)}") from exc
     except httpx.HTTPError as exc:
         raise ResourceError(f"HTTP request failed: {describe_error(exc)}") from exc
 
@@ -564,9 +638,27 @@ def main(argv: list[str] | None = None) -> None:
     )
     parser.add_argument("--host", default="127.0.0.1", help="Bind host for HTTP transports.")
     parser.add_argument("--port", type=int, default=8000, help="Bind port for HTTP transports.")
+    parser.add_argument(
+        "--allowed-origin",
+        action="append",
+        default=[],
+        metavar="ORIGIN",
+        help="Allowed browser Origin for streamable HTTP. Repeat for each trusted origin.",
+    )
     args = parser.parse_args(argv)
     if args.transport == "stdio":
         mcp.run()
+    elif args.transport == "streamable-http":
+        origin = f"http://{args.host}:{args.port}"
+        mcp.run(
+            transport=args.transport,
+            host=args.host,
+            port=args.port,
+            transport_security=TransportSecuritySettings(
+                allowed_hosts=[f"{args.host}:{args.port}"],
+                allowed_origins=args.allowed_origin or [origin],
+            ),
+        )
     else:
         mcp.run(transport=args.transport, host=args.host, port=args.port)
 
