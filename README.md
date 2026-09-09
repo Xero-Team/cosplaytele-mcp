@@ -2,7 +2,7 @@
 
 面向 CosplayTele 及同类图库站点的 MCP 2（Model Context Protocol，规范 2026-07-28）服务器。
 
-需要 Python 3.10+。已发布：[cosplaytele-mcp](https://pypi.org/project/cosplaytele-mcp/)。
+需要 Python 3.14+。已发布：[cosplaytele-mcp](https://pypi.org/project/cosplaytele-mcp/)。
 
 ## 安装
 
@@ -117,7 +117,7 @@ cosplaytele-mcp --transport streamable-http --host 0.0.0.0 --port 8000 \
 - `related(source, path, page=1, exclude_ai=true)`：相近套图。CosplayTele 走 Contextual Related Posts；其余源用图集第一个标签
 - `get_gallery(source, path, offset=0, limit=20)`：详情和图片 URL。默认只回前 20 张加 `image_count`；`limit=0` 只回元数据。`path` 用列表或搜索结果里的 `path`，也接受完整帖子 URL。可能带 `download_urls`、`has_video`（有视频时只打标，不返回可播放流）
 
-列表项在源站提供时带 `tags`、`published_at`、`image_count`、`has_video`。没有的字段为 `null` / 空列表，不会为凑字段再打详情。
+列表项在源站提供时带 `tags`、`published_at`、`image_count`、`has_video`。没有的字段为 `null` / 空列表，不会为凑字段再打详情。年龄语义容易被误判的制服主题词（如 `JK`、`校服`、`制服`、`school girl`、`school uniform`、`after school`）会在标题和标签中追加 `(18+)`；路径、搜索词和源站原始标识不变。
 
 CosplayTele 的 `category` 除表内 slug 外，也接受模特/作品分类 slug（如 `byoru`）。Hentai Cosplay 热门 `category` 为排行种类：`like`、`bookmark`、`download`、`tag`、`keyword`、`images`。OSOSEDKI `category=cosplays` 列出角色目录，再把名字交给 `browse_tag`。
 

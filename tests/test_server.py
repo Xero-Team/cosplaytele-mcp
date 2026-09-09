@@ -155,6 +155,20 @@ async def test_search_returns_single_source_results(monkeypatch: pytest.MonkeyPa
 
 
 @pytest.mark.anyio
+async def test_search_labels_age_coded_costume_terms(monkeypatch: pytest.MonkeyPatch) -> None:
+    registry = StubSearchRegistry(
+        [StubSearchSource("cosplaytele", search_page("cosplaytele", "JK Uniform"))]
+    )
+    monkeypatch.setattr("cosplaytele_mcp.server.SourceRegistry", lambda http: registry)
+    async with Client(mcp, raise_exceptions=True) as connected:
+        result = await connected.call_tool("search", {"query": "jk", "source": "cosplaytele"})
+    assert result.is_error is not True
+    payload = result.structured_content
+    assert payload is not None
+    assert [item["title"] for item in payload["items"]] == ["JK (18+) Uniform (18+)"]
+
+
+@pytest.mark.anyio
 async def test_search_keeps_successful_sources_when_one_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -181,6 +195,26 @@ async def test_search_keeps_successful_sources_when_one_fails(
             "message": "upstream unavailable",
         }
     ]
+
+
+@pytest.mark.anyio
+async def test_search_associates_parallel_task_results_with_their_sources(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry = StubSearchRegistry(
+        [
+            StubSearchSource("cosplaytele", search_page("cosplaytele", "Fast")),
+            StubSearchSource("hentaicosplay", search_page("hentaicosplay", "Slow"), delay=0.01),
+        ]
+    )
+    monkeypatch.setattr("cosplaytele_mcp.server.SourceRegistry", lambda http: registry)
+    async with Client(mcp, raise_exceptions=True) as connected:
+        result = await connected.call_tool("search", {"query": "miku", "source": "all"})
+    assert result.is_error is not True
+    payload = result.structured_content
+    assert payload is not None
+    assert [item["title"] for item in payload["items"]] == ["Fast", "Slow"]
+    assert payload["successful_sources"] == ["cosplaytele", "hentaicosplay"]
 
 
 @pytest.mark.anyio
