@@ -2,6 +2,83 @@
 
 面向 CosplayTele 及同类图库站点的 MCP 2（Model Context Protocol，规范 2026-07-28）服务器。
 
+需要 Python 3.10+。已发布：[cosplaytele-mcp](https://pypi.org/project/cosplaytele-mcp/)。
+
+## 安装
+
+```bash
+uvx cosplaytele-mcp
+```
+
+`uvx` 会临时拉取包并走 stdio 启动，适合直接接到宿主。持久安装：
+
+```bash
+uv tool install cosplaytele-mcp
+# 或
+pip install cosplaytele-mcp
+```
+
+装完后命令是 `cosplaytele-mcp`。
+
+## 接入宿主
+
+推荐用 `uvx`，不必克隆仓库。若宿主找不到 `uvx`，把 `command` 换成 `uvx` 的绝对路径（常见是 `~/.local/bin/uvx`）。
+
+Claude Desktop / Cursor（`mcpServers`）：
+
+```json
+{
+  "mcpServers": {
+    "cosplaytele": {
+      "command": "uvx",
+      "args": ["cosplaytele-mcp"]
+    }
+  }
+}
+```
+
+已用 `uv tool install` 或 `pip install` 时：
+
+```json
+{
+  "mcpServers": {
+    "cosplaytele": {
+      "command": "cosplaytele-mcp"
+    }
+  }
+}
+```
+
+VS Code `.vscode/mcp.json`：
+
+```json
+{
+  "servers": {
+    "cosplaytele": {
+      "type": "stdio",
+      "command": "uvx",
+      "args": ["cosplaytele-mcp"]
+    }
+  }
+}
+```
+
+## 运行
+
+stdio（给宿主用）：
+
+```bash
+uvx cosplaytele-mcp
+# 或已安装后
+cosplaytele-mcp
+```
+
+HTTP：
+
+```bash
+uvx --from cosplaytele-mcp python -c "from cosplaytele_mcp.server import mcp; mcp.run(transport='streamable-http', port=8000)"
+```
+
 ## 源
 
 | id | 站点 | 热门 | 最新 | 搜索 |
@@ -52,12 +129,11 @@
 
 资源：`sources://catalog`、`gallery://{source}/{+path}`。提示词：`find_gallery`。
 
-## 运行
+## 开发
 
-需要 Python 3.10+ 和 [uv](https://docs.astral.sh/uv/)。
+克隆仓库后用 [uv](https://docs.astral.sh/uv/)：
 
 ```bash
-cd /home/begonia/Documents/Github/XeroTeam/cosplaytele-mcp
 uv sync --dev
 uv run ruff check src tests
 uv run ruff format --check src tests
@@ -70,59 +146,4 @@ uv run mcp dev src/cosplaytele_mcp/server.py
 ```bash
 uv run ruff format src tests
 uv run ruff check --fix src tests
-```
-
-stdio 启动（给宿主用）：
-
-```bash
-uv run cosplaytele-mcp
-# 或
-uv run mcp run src/cosplaytele_mcp/server.py
-```
-
-HTTP：
-
-```bash
-uv run python -c "from cosplaytele_mcp.server import mcp; mcp.run(transport='streamable-http', port=8000)"
-```
-
-## 接入宿主
-
-把 `uv` 和项目路径换成本机绝对路径。
-
-Claude Desktop / Cursor（`mcpServers`）：
-
-```json
-{
-  "mcpServers": {
-    "cosplaytele": {
-      "command": "uv",
-      "args": [
-        "run",
-        "--directory",
-        "/home/begonia/Documents/Github/XeroTeam/cosplaytele-mcp",
-        "cosplaytele-mcp"
-      ]
-    }
-  }
-}
-```
-
-VS Code `.vscode/mcp.json`：
-
-```json
-{
-  "servers": {
-    "cosplaytele": {
-      "type": "stdio",
-      "command": "uv",
-      "args": [
-        "run",
-        "--directory",
-        "/home/begonia/Documents/Github/XeroTeam/cosplaytele-mcp",
-        "cosplaytele-mcp"
-      ]
-    }
-  }
-}
 ```
