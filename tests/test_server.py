@@ -378,6 +378,6 @@ def test_package_version() -> None:
     from cosplaytele_mcp.server import _package_version
     from cosplaytele_mcp.version import __version__
 
-    assert __version__ == "0.2.1"
+    assert __version__ == "0.3.0"
     assert _package_version() == __version__
     assert f'version = "{__version__}"' in Path("pyproject.toml").read_text()
