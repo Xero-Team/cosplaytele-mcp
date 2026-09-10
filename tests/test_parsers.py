@@ -123,6 +123,8 @@ def test_cosplaytele_gallery_images() -> None:
     )
     assert window.image_count == 2
     assert window.image_urls == images[:1]
+    assert [asset.url for asset in window.image_assets] == images[:1]
+    assert window.image_assets[0].headers == {}
     assert window.has_more_images is True
     meta = source.make_gallery(
         title="Kisaki Gallery",
@@ -133,7 +135,20 @@ def test_cosplaytele_gallery_images() -> None:
         limit=0,
     )
     assert meta.image_urls == []
+    assert meta.image_assets == []
     assert meta.image_count == 2
+
+
+def test_hentaicosplay_image_assets_include_hotlink_headers() -> None:
+    source = HentaiCosplaySource(http=None)  # type: ignore[arg-type]
+    gallery = source.make_gallery(
+        title="Probe",
+        path="/image/probe/",
+        url="https://hentai-cosplay-xxx.com/image/probe/",
+        images=["https://static17.hentai-cosplay-xxx.com/upload/probe.webp"],
+    )
+    assert gallery.image_assets[0].headers["Referer"] == "https://hentai-cosplay-xxx.com/"
+    assert "Mozilla/5.0" in gallery.image_assets[0].headers["User-Agent"]
 
 
 def test_hentaicosplay_title_from_og() -> None:

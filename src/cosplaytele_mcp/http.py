@@ -85,12 +85,14 @@ class Http:
         referer: str | None = None,
         params: dict[str, Any] | None = None,
         timeout: float | httpx.Timeout | object | None = USE_CLIENT_TIMEOUT,
+        cache: bool = True,
     ) -> httpx.Response:
         self._validate_url(url)
         key = _cache_key(url, params)
-        cached = self._cache_take(key)
-        if cached is not None:
-            return cached
+        if cache:
+            cached = self._cache_take(key)
+            if cached is not None:
+                return cached
         headers = {"Referer": referer} if referer else None
         last_error: BaseException | None = None
         for attempt in range(RETRY_ATTEMPTS):
@@ -103,7 +105,8 @@ class Http:
                     await asyncio.sleep(RETRY_BACKOFF * (attempt + 1))
                     continue
                 response.raise_for_status()
-                self._cache_put(key, response)
+                if cache:
+                    self._cache_put(key, response)
                 return response
             except (httpx.TimeoutException, httpx.ConnectError, httpx.RemoteProtocolError) as exc:
                 last_error = exc

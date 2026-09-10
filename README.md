@@ -115,7 +115,8 @@ cosplaytele-mcp --transport streamable-http --host 0.0.0.0 --port 8000 \
 - `browse(source, sort=popular|latest, page=1, query?, category?, period?, exclude_ai=true)`：排行 / 最新；只带 `category` 时按该分类列出，不走关键词搜索；带 `query` 时走该源搜索。`period` 仅部分源的热门有效：CosplayTele 为 `last24hours|last7days|last30days|all`，Hentai Cosplay 为 `day|week|month|year`
 - `browse_tag(source, tag, page=1, exclude_ai=true)`：按标签列出
 - `related(source, path, page=1, exclude_ai=true)`：相近套图。CosplayTele 走 Contextual Related Posts；其余源用图集第一个标签
-- `get_gallery(source, path, offset=0, limit=20)`：详情和图片 URL。默认只回前 20 张加 `image_count`；`limit=0` 只回元数据。`path` 用列表或搜索结果里的 `path`，也接受完整帖子 URL。可能带 `download_urls`、`has_video`（有视频时只打标，不返回可播放流）
+- `get_gallery(source, path, offset=0, limit=20)`：详情和图片 URL。默认只回前 20 张加 `image_count`；`limit=0` 只回元数据。`path` 用列表或搜索结果里的 `path`，也接受完整帖子 URL。`image_assets` 为每个 `image_urls` 条目附带源站要求的请求头；可能带 `download_urls`、`has_video`（有视频时只打标，不返回可播放流）
+- `fetch_image(source, path, index)`：按需取图集中的一张，按 `image_assets` 的请求头请求源站，并返回 MCP `ImageContent`。不写本地文件，不下载整套图集；单图上限 20 MiB，较大的原图请用 `image_assets` 自行请求。
 
 列表项在源站提供时带 `tags`、`published_at`、`image_count`、`has_video`。没有的字段为 `null` / 空列表，不会为凑字段再打详情。年龄语义容易被误判的制服主题词（如 `JK`、`校服`、`制服`、`school girl`、`school uniform`、`after school`）会在标题和标签中追加 `(18+)`；路径、搜索词和源站原始标识不变。
 

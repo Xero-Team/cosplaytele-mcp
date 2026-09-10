@@ -76,6 +76,21 @@ async def test_http_cache_can_be_disabled() -> None:
 
 
 @pytest.mark.anyio
+async def test_http_request_can_bypass_an_enabled_cache() -> None:
+    attempts = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        attempts["n"] += 1
+        return httpx.Response(200, content=b"image")
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        http = Http(client)
+        await http.get("https://example.com/image.webp", cache=False)
+        await http.get("https://example.com/image.webp", cache=False)
+    assert attempts["n"] == 2
+
+
+@pytest.mark.anyio
 async def test_http_inherits_the_client_timeout_by_default() -> None:
     seen: dict[str, object] = {}
 

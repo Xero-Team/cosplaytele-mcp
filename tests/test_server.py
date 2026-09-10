@@ -1,11 +1,14 @@
 import asyncio
 
+import httpx
 import pytest
 from mcp import Client
-from mcp.types import PromptReference, ResourceTemplateReference, TextContent
+from mcp.server.mcpserver.exceptions import ToolError
+from mcp.types import ImageContent, PromptReference, ResourceTemplateReference, TextContent
 
-from cosplaytele_mcp.models import Gallery, ListingItem, ListingPage, SourceId
-from cosplaytele_mcp.server import mcp
+from cosplaytele_mcp.http import Http
+from cosplaytele_mcp.models import Gallery, ImageAsset, ListingItem, ListingPage, SourceId
+from cosplaytele_mcp.server import _image_content, mcp
 from cosplaytele_mcp.sources import SourceError
 
 
@@ -105,6 +108,7 @@ async def test_list_tools_and_resources(client: Client) -> None:
         "open_url",
         "browse_tag",
         "related",
+        "fetch_image",
     } <= tool_names
     by_name = {tool.name: tool for tool in tools.tools}
     assert by_name["list_sources"].annotations is not None
@@ -114,11 +118,60 @@ async def test_list_tools_and_resources(client: Client) -> None:
     assert by_name["search"].annotations.read_only_hint is True
     assert by_name["search"].annotations.open_world_hint is True
     assert by_name["search"].annotations.idempotent_hint is None
+    assert by_name["fetch_image"].annotations is not None
+    assert by_name["fetch_image"].annotations.read_only_hint is True
     resources = await client.list_resources()
     uris = {str(resource.uri) for resource in resources.resources}
     assert "sources://catalog" in uris
     templates = await client.list_resource_templates()
     assert any("gallery://" in template.uri_template for template in templates.resource_templates)
+
+
+@pytest.mark.anyio
+async def test_image_content_uses_asset_referer_and_is_not_cached() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, headers={"content-type": "image/webp"}, content=b"webp")
+
+    asset = ImageAsset(
+        url="https://static.example.com/image.webp",
+        headers={"Referer": "https://example.com/"},
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        http = Http(client, allowed_hosts=("https://example.com",))
+        first = await _image_content(http, asset)
+        second = await _image_content(http, asset)
+    assert isinstance(first, ImageContent)
+    assert first.mime_type == "image/webp"
+    assert first.data == "d2VicA=="
+    assert second.data == first.data
+    assert len(requests) == 2
+    assert requests[0].headers["referer"] == "https://example.com/"
+
+
+@pytest.mark.anyio
+async def test_image_content_rejects_non_image_response() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, headers={"content-type": "text/html"}, content=b"blocked")
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        http = Http(client, allowed_hosts=("https://example.com",))
+        with pytest.raises(ToolError, match="unsupported image content type"):
+            await _image_content(http, ImageAsset(url="https://example.com/blocked"))
+
+
+@pytest.mark.anyio
+async def test_image_content_enforces_size_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, headers={"content-type": "image/png"}, content=b"large")
+
+    monkeypatch.setattr("cosplaytele_mcp.server.MAX_IMAGE_CONTENT_BYTES", 4)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        http = Http(client, allowed_hosts=("https://example.com",))
+        with pytest.raises(ToolError, match="fetch_image supports at most 4 bytes"):
+            await _image_content(http, ImageAsset(url="https://example.com/image.png"))
 
 
 @pytest.mark.anyio
@@ -378,6 +431,6 @@ def test_package_version() -> None:
     from cosplaytele_mcp.server import _package_version
     from cosplaytele_mcp.version import __version__
 
-    assert __version__ == "0.3.0"
+    assert __version__ == "0.3.1"
     assert _package_version() == __version__
     assert f'version = "{__version__}"' in Path("pyproject.toml").read_text()

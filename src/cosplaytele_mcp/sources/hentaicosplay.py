@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from typing import ClassVar
 from urllib.parse import quote
 
 from selectolax.parser import HTMLParser, Node
@@ -14,6 +15,7 @@ from cosplaytele_mcp.htmlutil import (
     slugify,
     text_of,
 )
+from cosplaytele_mcp.http import DEFAULT_HEADERS
 from cosplaytele_mcp.models import Gallery, ListingItem, ListingPage, needed_images
 from cosplaytele_mcp.sources.base import GallerySource, SourceError
 
@@ -34,6 +36,10 @@ class HentaiCosplaySource(GallerySource):
     name = "Hentai Cosplay"
     base_url = "https://hentai-cosplay-xxx.com"
     ranking_kinds = tuple(RANKINGS)
+    image_request_headers: ClassVar[dict[str, str]] = {
+        "Referer": f"{base_url}/",
+        "User-Agent": DEFAULT_HEADERS["User-Agent"],
+    }
 
     async def popular(
         self, page: int, category: str | None = None, period: str | None = None

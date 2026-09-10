@@ -92,6 +92,14 @@ class SearchPage(BaseModel):
     )
 
 
+class ImageAsset(BaseModel):
+    url: str = Field(description="Direct image URL for this gallery image.")
+    headers: dict[str, str] = Field(
+        default_factory=dict,
+        description="HTTP headers required when fetching the direct image URL, such as Referer.",
+    )
+
+
 class Gallery(BaseModel):
     source: SourceId
     title: str
@@ -114,6 +122,10 @@ class Gallery(BaseModel):
     has_more_images: bool = False
     image_urls: list[str] = Field(
         description="Direct image URLs for this window. Do not download binaries."
+    )
+    image_assets: list[ImageAsset] = Field(
+        default_factory=list,
+        description="Image URLs with any source-required HTTP request headers.",
     )
 
 

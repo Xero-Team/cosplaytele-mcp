@@ -6,7 +6,14 @@ from urllib.parse import urljoin
 
 from cosplaytele_mcp.htmlutil import normalize_path
 from cosplaytele_mcp.http import Http
-from cosplaytele_mcp.models import Gallery, ListingPage, SourceId, SourceInfo, window_images
+from cosplaytele_mcp.models import (
+    Gallery,
+    ImageAsset,
+    ListingPage,
+    SourceId,
+    SourceInfo,
+    window_images,
+)
 
 
 class SourceError(Exception):
@@ -23,6 +30,7 @@ class GallerySource(ABC):
     popular_kind: ClassVar[Literal["ranking", "archive", "featured"]] = "ranking"
     ranking_kinds: ClassVar[tuple[str, ...]] = ()
     category_names: ClassVar[tuple[str, ...]] = ()
+    image_request_headers: ClassVar[dict[str, str]] = {}
 
     def __init__(self, http: Http) -> None:
         self.http = http
@@ -68,6 +76,7 @@ class GallerySource(ABC):
         is_ai: bool = False,
         has_video: bool = False,
         download_urls: list[str] | None = None,
+        image_headers: dict[str, str] | None = None,
     ) -> Gallery:
         sliced, count, off, more = window_images(
             images,
@@ -92,6 +101,10 @@ class GallerySource(ABC):
             image_offset=off,
             has_more_images=more,
             image_urls=sliced,
+            image_assets=[
+                ImageAsset(url=image, headers=dict(image_headers or self.image_request_headers))
+                for image in sliced
+            ],
         )
 
     @abstractmethod
