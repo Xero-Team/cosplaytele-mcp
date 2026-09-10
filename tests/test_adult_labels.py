@@ -14,6 +14,10 @@ def test_label_adult_theme_text_is_idempotent() -> None:
     assert label_adult_theme_text(text) == text
 
 
+def test_label_adult_theme_text_does_not_split_hololive() -> None:
+    assert label_adult_theme_text("hololive / Loli") == "hololive / Loli (18+)"
+
+
 def test_apply_adult_labels_updates_listing_titles_and_tags() -> None:
     page = ListingPage(
         source="cosplaytele",
