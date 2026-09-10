@@ -12,6 +12,7 @@ from cosplaytele_mcp.sources.foamgirl import FoamGirlSource
 from cosplaytele_mcp.sources.fourkhd import FourKHDSource
 from cosplaytele_mcp.sources.hentaicosplay import HentaiCosplaySource
 from cosplaytele_mcp.sources.kiutaku import KiutakuSource
+from cosplaytele_mcp.sources.lovecutes import LoveCutesSource
 from cosplaytele_mcp.sources.misskon import MissKonSource
 from cosplaytele_mcp.sources.mitaku import MitakuSource
 from cosplaytele_mcp.sources.ososedki import OsosedkiSource
@@ -28,6 +29,7 @@ SOURCE_TYPES = (
     FoamGirlSource,
     OsosedkiSource,
     MitakuSource,
+    LoveCutesSource,
 )
 
 HOST_TO_SOURCE = {host_key(cls.base_url): cls.id for cls in SOURCE_TYPES}

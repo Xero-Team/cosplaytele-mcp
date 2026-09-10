@@ -106,6 +106,7 @@ cosplaytele-mcp --transport streamable-http --host 0.0.0.0 --port 8000 \
 | `foamgirl` | https://foamgirl.net/cosplay | `/cosplay` | 无 | `?s=` |
 | `ososedki` | https://ososedki.com | `/api/albums?type=top` | `/api/albums` | `type=search` |
 | `mitaku` | https://mitaku.net | `/category/ero-cosplay/` | 无 | `?s=` |
+| `lovecutes` | https://www.lovecutes.com/type/6/ | Cosplay 分类（`type/6`） | 无 | 全站搜索后仅保留 Cosplay 分类 |
 
 ## 工具
 

@@ -14,6 +14,7 @@ from cosplaytele_mcp.server import interleave_hits
 from cosplaytele_mcp.sources import SourceError, SourceRegistry
 from cosplaytele_mcp.sources.cosplaytele import CATEGORIES, CosplayTeleSource
 from cosplaytele_mcp.sources.hentaicosplay import HentaiCosplaySource
+from cosplaytele_mcp.sources.lovecutes import LoveCutesSource
 from cosplaytele_mcp.sources.ososedki import OsosedkiSource
 from cosplaytele_mcp.wordpress import listing_from_posts
 
@@ -275,6 +276,7 @@ def test_registry_by_url() -> None:
     assert registry.by_url("https://cosplaytele.com/ryuuge-kisaki-4/").id == "cosplaytele"
     assert registry.by_url("https://www.4khd.com/foo.html").id == "fourkhd"
     assert registry.by_url("https://ja.hentai-cosplay-xxx.com/image/aqua/").id == "hentaicosplay"
+    assert registry.by_url("https://www.lovecutes.com/article/32567/").id == "lovecutes"
     with pytest.raises(SourceError, match="No source for host"):
         registry.by_url("https://example.com/x")
 
@@ -354,3 +356,51 @@ def test_apply_ai_filter_uses_listing_tags() -> None:
     )
     filtered = apply_ai_filter(page, exclude_ai=True)
     assert filtered.items == []
+
+
+def test_lovecutes_listing_item_uses_original_thumbnail_and_cosplay_marker() -> None:
+    source = LoveCutesSource(http=None)  # type: ignore[arg-type]
+    node = HTMLParser(
+        """
+        <article class="excerpt excerpt-c4">
+          <a class="imgbox-a" href="/type/6/">Cosplay</a>
+          <a class="imgbox-link" href="/article/32567/" title="[cosplay] Kisaki 27P"></a>
+          <img class="imgbox-img" src="/static/zde/timg.gif"
+               data-original-src="/static/images/cover.jpg">
+          <footer><time>2026-09-09</time></footer>
+        </article>
+        """
+    ).css_first("article")
+    item = source._listing_item(node, require_cosplay=True)
+    assert item is not None
+    assert item.path == "/article/32567/"
+    assert item.thumbnail_url == "https://www.lovecutes.com/static/images/cover.jpg"
+    assert item.image_count == 27
+    assert item.published_at == "2026-09-09"
+
+
+def test_lovecutes_listing_excludes_non_cosplay_search_results() -> None:
+    source = LoveCutesSource(http=None)  # type: ignore[arg-type]
+    node = HTMLParser(
+        '<article class="excerpt"><a class="imgbox-link" href="/article/1/" title="Other"></a></article>'
+    ).css_first("article")
+    assert source._listing_item(node, require_cosplay=True) is None
+
+
+def test_lovecutes_article_pagination_and_image_window() -> None:
+    source = LoveCutesSource(http=None)  # type: ignore[arg-type]
+    html = """
+      <h1 class="focusbox-title">Kisaki 27P</h1>
+      <script>const paginationData = {"current_page": 1, "total_pages": 3};</script>
+      <div class="image-container">
+        <img class="item-image__img" src="/static/images/001.jpg">
+        <img class="item-image__img" src="/static/zde/timg.gif" data-src="/static/images/002.jpg">
+      </div>
+    """
+    document = HTMLParser(html)
+    assert source._total_pages(html) == 3
+    assert source._known_count("Kisaki 27P", html) == 27
+    assert source._page_images(document) == [
+        "https://www.lovecutes.com/static/images/001.jpg",
+        "https://www.lovecutes.com/static/images/002.jpg",
+    ]

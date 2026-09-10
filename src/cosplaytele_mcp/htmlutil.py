@@ -22,7 +22,14 @@ def abs_url(base: str, value: str | None) -> str | None:
 def img_src(node: Node | None, base: str) -> str | None:
     if node is None:
         return None
-    for attr in ("data-original", "data-lazy-src", "data-src", "data-mfp-src", "file"):
+    for attr in (
+        "data-original",
+        "data-original-src",
+        "data-lazy-src",
+        "data-src",
+        "data-mfp-src",
+        "file",
+    ):
         value = node.attributes.get(attr)
         if not value:
             continue
