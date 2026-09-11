@@ -1,3 +1,5 @@
+import gzip
+
 import httpx
 import pytest
 
@@ -24,6 +26,26 @@ async def test_http_retries_on_503() -> None:
         payload = await Http(client).get_json("https://example.com/posts")
     assert payload == {"ok": True}
     assert attempts["n"] == 3
+
+
+@pytest.mark.anyio
+async def test_http_retries_decoding_error_without_compression() -> None:
+    attempts = {"n": 0}
+    encodings: list[str | None] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        attempts["n"] += 1
+        encodings.append(request.headers.get("accept-encoding"))
+        if attempts["n"] == 1:
+            raise httpx.DecodingError("incorrect header check", request=request)
+        return httpx.Response(200, json={"ok": True})
+
+    transport = httpx.MockTransport(handler)
+    async with httpx.AsyncClient(transport=transport, base_url="https://example.com") as client:
+        payload = await Http(client).get_json("https://example.com/posts")
+    assert payload == {"ok": True}
+    assert attempts["n"] == 2
+    assert encodings[1] == "identity"
 
 
 @pytest.mark.anyio
@@ -57,6 +79,24 @@ async def test_http_caches_successful_get() -> None:
     assert first == {"n": 1}
     assert second == {"n": 1}
     assert attempts["n"] == 1
+
+
+@pytest.mark.anyio
+async def test_http_cache_drops_decoded_body_headers() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-encoding": "gzip"},
+            content=gzip.compress(b'{"ok":true}'),
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        http = Http(client)
+        first = await http.get("https://example.com/posts")
+        second = await http.get("https://example.com/posts")
+    assert first.headers.get("content-encoding") == "gzip"
+    assert second.headers.get("content-encoding") is None
+    assert second.headers.get("content-length") == str(len(b'{"ok":true}'))
 
 
 @pytest.mark.anyio

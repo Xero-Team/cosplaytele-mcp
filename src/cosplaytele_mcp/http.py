@@ -93,7 +93,7 @@ class Http:
             cached = self._cache_take(key)
             if cached is not None:
                 return cached
-        headers = {"Referer": referer} if referer else None
+        headers = {"Referer": referer} if referer else {}
         last_error: BaseException | None = None
         for attempt in range(RETRY_ATTEMPTS):
             try:
@@ -108,6 +108,15 @@ class Http:
                 if cache:
                     self._cache_put(key, response)
                 return response
+            except httpx.DecodingError as exc:
+                last_error = exc
+                if attempt >= RETRY_ATTEMPTS - 1:
+                    raise
+                # A few upstream CDNs occasionally send a bad Content-Encoding header.
+                # Retry without compression so the body can still be parsed safely.
+                headers = {**headers, "Accept-Encoding": "identity"}
+                logger.debug("retrying %s after response decoding failure", url)
+                await asyncio.sleep(RETRY_BACKOFF * (attempt + 1))
             except (httpx.TimeoutException, httpx.ConnectError, httpx.RemoteProtocolError) as exc:
                 last_error = exc
                 if attempt >= RETRY_ATTEMPTS - 1:
@@ -191,10 +200,17 @@ class Http:
     def _cache_put(self, key: str, response: httpx.Response) -> None:
         if self._cache_ttl <= 0 or self._cache_size <= 0:
             return
+        # HTTPX has already decoded the body; retaining these wire-level headers
+        # would describe a different representation when the cached response is reused.
+        headers = [
+            (name, value)
+            for name, value in response.headers.items()
+            if name.lower() not in {"content-encoding", "content-length", "transfer-encoding"}
+        ]
         self._cache[key] = _CacheEntry(
             expires=time.monotonic() + self._cache_ttl,
             status_code=response.status_code,
-            headers=list(response.headers.items()),
+            headers=headers,
             content=response.content,
             url=str(response.url),
         )
