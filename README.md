@@ -85,8 +85,14 @@ cosplaytele-mcp --transport streamable-http --host 127.0.0.1 --port 8000
 
 ```bash
 cosplaytele-mcp --transport streamable-http --host 0.0.0.0 --port 8000 \
+  --allowed-host mcp.example.com \
   --allowed-origin https://mcp.example.com
 ```
+
+`--host` 只是本地监听地址；`--allowed-host` 必须填写反向代理转发的 Host（可重复指定，
+也可使用 `example.com:*` 匹配端口）。非 localhost 监听时，`--allowed-host` 和
+`--allowed-origin` 都是必填项。生产环境还应在反向代理或网关启用 HTTPS、认证、限流和审计。
+本项目只公开现代 Streamable HTTP；旧版 HTTP+SSE 已从 CLI 移除。
 
 `popular_kind=archive` 表示源站的分类或默认归档，不表示按统计热度排名。`ranking_kinds`
 与内容 `categories` 分开列出。
