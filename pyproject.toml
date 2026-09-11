@@ -7,7 +7,7 @@ requires-python = ">=3.14"
 license = { text = "MIT" }
 authors = [{ name = "XeroTeam" }]
 dependencies = [
-    "mcp[cli]>=2,<3",
+    "mcp[cli]>=2.2,<3",
     "httpx>=0.28",
     "pydantic>=2",
     "selectolax>=0.3",

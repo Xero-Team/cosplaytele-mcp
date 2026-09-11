@@ -4,6 +4,7 @@ import httpx
 import pytest
 from mcp import Client
 from mcp.server.mcpserver.exceptions import ToolError
+from mcp.shared.exceptions import MCPError
 from mcp.types import ImageContent, PromptReference, ResourceTemplateReference, TextContent
 
 from cosplaytele_mcp.http import Http
@@ -118,7 +119,7 @@ async def test_list_tools_and_resources(client: Client) -> None:
     assert by_name["search"].annotations is not None
     assert by_name["search"].annotations.read_only_hint is True
     assert by_name["search"].annotations.open_world_hint is True
-    assert by_name["search"].annotations.idempotent_hint is None
+    assert by_name["search"].annotations.idempotent_hint is True
     assert by_name["fetch_image"].annotations is not None
     assert by_name["fetch_image"].annotations.read_only_hint is True
     resources = await client.list_resources()
@@ -367,6 +368,15 @@ async def test_find_gallery_prompt(client: Client) -> None:
 
 
 @pytest.mark.anyio
+async def test_find_gallery_prompt_missing_query_is_invalid_params() -> None:
+    async with Client(mcp, raise_exceptions=True) as connected:
+        with pytest.raises(MCPError) as exc:
+            await connected.get_prompt("find_gallery", {})
+    assert exc.value.code == -32602
+    assert "query" in exc.value.message
+
+
+@pytest.mark.anyio
 async def test_source_completions(client: Client) -> None:
     prompt = await client.complete(
         ref=PromptReference(type="ref/prompt", name="find_gallery"),
@@ -417,13 +427,42 @@ def test_main_configures_streamable_http_origin_protection(monkeypatch: pytest.M
             "0.0.0.0",
             "--port",
             "8080",
+            "--allowed-host",
+            "mcp.example.com",
             "--allowed-origin",
             "https://mcp.example.com",
         ]
     )
     settings = captured["transport_security"]
-    assert settings.allowed_hosts == ["0.0.0.0:8080"]
+    assert settings.allowed_hosts == ["mcp.example.com"]
     assert settings.allowed_origins == ["https://mcp.example.com"]
+
+
+def test_main_configures_loopback_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
+    from cosplaytele_mcp import server
+
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(server.mcp, "run", lambda **kwargs: captured.update(kwargs))
+    server.main(["--transport", "streamable-http", "--port", "8080"])
+    settings = captured["transport_security"]
+    assert settings.allowed_hosts == ["127.0.0.1:8080", "localhost:8080"]
+    assert settings.allowed_origins == ["http://127.0.0.1:8080", "http://localhost:8080"]
+
+
+def test_main_rejects_legacy_sse_transport() -> None:
+    from cosplaytele_mcp import server
+
+    with pytest.raises(SystemExit) as exc:
+        server.main(["--transport", "sse"])
+    assert exc.value.code == 2
+
+
+def test_main_requires_remote_allowlists() -> None:
+    from cosplaytele_mcp import server
+
+    with pytest.raises(SystemExit) as exc:
+        server.main(["--transport", "streamable-http", "--host", "0.0.0.0"])
+    assert exc.value.code == 2
 
 
 def test_package_version() -> None:
