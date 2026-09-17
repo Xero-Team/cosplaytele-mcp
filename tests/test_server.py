@@ -95,6 +95,11 @@ async def test_list_sources(client: Client) -> None:
         "ososedki",
         "mitaku",
         "lovecutes",
+        "simplycosplay",
+        "jjcos",
+        "buondua",
+        "xasiat",
+        "baobua",
     }
 
 

@@ -3,19 +3,24 @@ from __future__ import annotations
 from cosplaytele_mcp.htmlutil import host_key
 from cosplaytele_mcp.http import Http
 from cosplaytele_mcp.models import SourceId
+from cosplaytele_mcp.sources.baobua import BaoBuaSource
 from cosplaytele_mcp.sources.base import GallerySource, SourceError
 from cosplaytele_mcp.sources.beauty3600000 import Beauty3600000Source
+from cosplaytele_mcp.sources.buondua import BuonDuaSource
 from cosplaytele_mcp.sources.cosplaytele import CosplayTeleSource
 from cosplaytele_mcp.sources.cup2d import Cup2DSource
 from cosplaytele_mcp.sources.everia import EveriaSource
 from cosplaytele_mcp.sources.foamgirl import FoamGirlSource
 from cosplaytele_mcp.sources.fourkhd import FourKHDSource
 from cosplaytele_mcp.sources.hentaicosplay import HentaiCosplaySource
+from cosplaytele_mcp.sources.jjcos import JJCOSSource
 from cosplaytele_mcp.sources.kiutaku import KiutakuSource
 from cosplaytele_mcp.sources.lovecutes import LoveCutesSource
 from cosplaytele_mcp.sources.misskon import MissKonSource
 from cosplaytele_mcp.sources.mitaku import MitakuSource
 from cosplaytele_mcp.sources.ososedki import OsosedkiSource
+from cosplaytele_mcp.sources.simplycosplay import SimplyCosplaySource
+from cosplaytele_mcp.sources.xasiat import XasiatSource
 
 SOURCE_TYPES = (
     CosplayTeleSource,
@@ -30,9 +35,27 @@ SOURCE_TYPES = (
     OsosedkiSource,
     MitakuSource,
     LoveCutesSource,
+    SimplyCosplaySource,
+    JJCOSSource,
+    BuonDuaSource,
+    XasiatSource,
+    BaoBuaSource,
 )
 
 HOST_TO_SOURCE = {host_key(cls.base_url): cls.id for cls in SOURCE_TYPES}
+
+
+def source_allowed_hosts() -> tuple[str, ...]:
+    hosts: list[str] = []
+    seen: set[str] = set()
+    for cls in SOURCE_TYPES:
+        for raw in (cls.base_url, *cls.extra_hosts):
+            key = host_key(raw)
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            hosts.append(raw)
+    return tuple(hosts)
 
 
 class SourceRegistry:
@@ -65,4 +88,4 @@ class SourceRegistry:
         return self.get(source_id)
 
 
-__all__ = ["GallerySource", "SourceError", "SourceRegistry"]
+__all__ = ["GallerySource", "SourceError", "SourceRegistry", "source_allowed_hosts"]

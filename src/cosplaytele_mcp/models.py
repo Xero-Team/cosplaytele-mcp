@@ -17,6 +17,11 @@ SourceId = Literal[
     "beauty3600000",
     "foamgirl",
     "lovecutes",
+    "simplycosplay",
+    "jjcos",
+    "buondua",
+    "xasiat",
+    "baobua",
 ]
 
 BrowseSort = Literal["popular", "latest"]

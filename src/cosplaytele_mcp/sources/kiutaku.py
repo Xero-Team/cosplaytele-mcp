@@ -1,16 +1,23 @@
 from __future__ import annotations
 
+import re
+from typing import ClassVar
 from urllib.parse import urlencode
+
+from selectolax.parser import HTMLParser
 
 from cosplaytele_mcp.htmlutil import abs_url, attr, img_src, path_of, text_of
 from cosplaytele_mcp.models import Gallery, ListingItem, ListingPage, needed_images
 from cosplaytele_mcp.sources.base import GallerySource, SourceError
+
+PAGE_SUFFIX_RE = re.compile(r"\s*-\s*\(\s*Page\s+\d+\s*/\s*\d+\s*\)\s*$", re.I)
 
 
 class KiutakuSource(GallerySource):
     id = "kiutaku"
     name = "Kiutaku"
     base_url = "https://kiutaku.com"
+    listing_item_selector: ClassVar[str] = "div.blog > div.items-row"
 
     def _offset(self, page: int) -> int:
         return (page - 1) * 20
@@ -37,7 +44,7 @@ class KiutakuSource(GallerySource):
         resolved = self.resolve_path(path)
         url = self.absolute(resolved)
         first = await self.http.get_html(url, referer=f"{self.base_url}/")
-        title = text_of(first.css_first("div.article-header, h1")) or "Cosplay"
+        title = self._gallery_title(first)
         tags = [
             text_of(node).lstrip("#")
             for node in first.css("div.article-tags a.tag > span")
@@ -72,16 +79,15 @@ class KiutakuSource(GallerySource):
                 stopped = True
                 break
             document = first if page_url == url else await self.http.get_html(page_url, referer=url)
-            for img in document.css("div.article-fulltext img[src], div.article-fulltext img"):
-                src = img_src(img, self.base_url)
-                if src and src not in seen_images:
+            for src in self._page_images(document):
+                if src not in seen_images:
                     seen_images.add(src)
                     images.append(src)
             if budget is not None and len(images) >= budget and index + 1 < len(unique_pages):
                 stopped = True
                 break
         if not images:
-            raise SourceError(f"Kiutaku gallery has no images: {url}")
+            raise SourceError(f"{self.name} gallery has no images: {url}")
         return self.make_gallery(
             title=title,
             path=resolved,
@@ -96,8 +102,17 @@ class KiutakuSource(GallerySource):
 
     async def _listing(self, url: str, page: int) -> ListingPage:
         document = await self.http.get_html(url, referer=f"{self.base_url}/")
+        items = self.listing_items(document)
+        next_link = document.css_first("a.pagination-next")
+        has_next = False
+        if next_link is not None:
+            classes = (next_link.attributes.get("class") or "").split()
+            has_next = "disabled" not in classes and next_link.attributes.get("disabled") is None
+        return ListingPage(source=self.id, page=page, has_next_page=has_next, items=items)
+
+    def listing_items(self, document: HTMLParser) -> list[ListingItem]:
         items: list[ListingItem] = []
-        for node in document.css("div.blog > div.items-row"):
+        for node in document.css(self.listing_item_selector):
             link = node.css_first("a.item-link")
             href = abs_url(self.base_url, attr(link, "href"))
             title = text_of(node.css_first("h2")) or "Cosplay"
@@ -111,9 +126,22 @@ class KiutakuSource(GallerySource):
                     thumbnail_url=img_src(node.css_first("img"), self.base_url),
                 )
             )
-        next_link = document.css_first("a.pagination-next")
-        has_next = False
-        if next_link is not None:
-            classes = (next_link.attributes.get("class") or "").split()
-            has_next = "disabled" not in classes and next_link.attributes.get("disabled") is None
-        return ListingPage(source=self.id, page=page, has_next_page=has_next, items=items)
+        return items
+
+    def _gallery_title(self, document: HTMLParser) -> str:
+        return (
+            PAGE_SUFFIX_RE.sub(
+                "", text_of(document.css_first("div.article-header, h1")) or "Cosplay"
+            ).strip()
+            or "Cosplay"
+        )
+
+    def _page_images(self, document: HTMLParser) -> list[str]:
+        images: list[str] = []
+        seen: set[str] = set()
+        for img in document.css("div.article-fulltext img[src], div.article-fulltext img"):
+            src = img_src(img, self.base_url)
+            if src and src not in seen:
+                seen.add(src)
+                images.append(src)
+        return images

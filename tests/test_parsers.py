@@ -11,11 +11,17 @@ from cosplaytele_mcp.htmlutil import (
 )
 from cosplaytele_mcp.models import ListingItem, ListingPage, SearchHit, needed_images, window_images
 from cosplaytele_mcp.server import interleave_hits
-from cosplaytele_mcp.sources import SourceError, SourceRegistry
+from cosplaytele_mcp.sources import SourceError, SourceRegistry, source_allowed_hosts
+from cosplaytele_mcp.sources.baobua import BaoBuaSource
+from cosplaytele_mcp.sources.buondua import BuonDuaSource
 from cosplaytele_mcp.sources.cosplaytele import CATEGORIES, CosplayTeleSource
 from cosplaytele_mcp.sources.hentaicosplay import HentaiCosplaySource
+from cosplaytele_mcp.sources.jjcos import JJCOSSource, posts_from_index
+from cosplaytele_mcp.sources.kiutaku import KiutakuSource
 from cosplaytele_mcp.sources.lovecutes import LoveCutesSource
 from cosplaytele_mcp.sources.ososedki import OsosedkiSource
+from cosplaytele_mcp.sources.simplycosplay import SimplyCosplaySource, token_from_script
+from cosplaytele_mcp.sources.xasiat import XasiatSource, looks_like_cosplay
 from cosplaytele_mcp.wordpress import listing_from_posts
 
 GALLERY_HTML = """
@@ -277,8 +283,19 @@ def test_registry_by_url() -> None:
     assert registry.by_url("https://www.4khd.com/foo.html").id == "fourkhd"
     assert registry.by_url("https://ja.hentai-cosplay-xxx.com/image/aqua/").id == "hentaicosplay"
     assert registry.by_url("https://www.lovecutes.com/article/32567/").id == "lovecutes"
+    assert registry.by_url("https://www.simply-cosplay.com/gallery/new/eula/").id == "simplycosplay"
+    assert registry.by_url("https://jjcos.com/post/Eula/").id == "jjcos"
+    assert registry.by_url("https://buondua.com/tag/cosplay-10688").id == "buondua"
+    assert registry.by_url("https://www.xasiat.com/albums/1/eula/").id == "xasiat"
+    assert registry.by_url("https://baobua.net/spot/abc.html").id == "baobua"
     with pytest.raises(SourceError, match="No source for host"):
         registry.by_url("https://example.com/x")
+
+
+def test_source_allowed_hosts_includes_simply_cosplay_api() -> None:
+    hosts = {host_key(item) for item in source_allowed_hosts()}
+    assert "simply-cosplay.com" in hosts
+    assert "api.simply-porn.com" in hosts
 
 
 def test_download_urls_and_video_hints() -> None:
@@ -403,4 +420,229 @@ def test_lovecutes_article_pagination_and_image_window() -> None:
     assert source._page_images(document) == [
         "https://www.lovecutes.com/static/images/001.jpg",
         "https://www.lovecutes.com/static/images/002.jpg",
+    ]
+
+
+def test_simplycosplay_token_and_listing() -> None:
+    assert token_from_script('foo token:"01730876" bar') == "01730876"
+    assert token_from_script("token: 'abc123'") == "abc123"
+    source = SimplyCosplaySource(http=None)  # type: ignore[arg-type]
+    items = source._listing_items(
+        {
+            "data": [
+                {
+                    "title": "Eula",
+                    "slug": "eula-set",
+                    "type": "Gallery",
+                    "preview": {
+                        "publish_date": "2026-09-01T12:00:00.000",
+                        "urls": {"thumb": {"url": "https://cdn.example/thumb.webp"}},
+                    },
+                }
+            ]
+        }
+    )
+    assert items[0].path == "/gallery/new/eula-set"
+    assert items[0].thumbnail_url == "https://cdn.example/thumb.webp"
+    assert items[0].published_at == "2026-09-01"
+    images = source._gallery_images(
+        {
+            "images": [
+                {"urls": {"url": "https://cdn.example/1.webp"}},
+                {"urls": {"url": "https://cdn.example/2.webp"}},
+            ],
+            "preview": {"urls": {"url": "https://cdn.example/preview.webp"}},
+        }
+    )
+    assert images == ["https://cdn.example/1.webp", "https://cdn.example/2.webp"]
+    assert source._kind_and_slug("/gallery/new/eula-set") == ("gallery", "eula-set")
+
+
+def test_jjcos_listing_and_gallery_images() -> None:
+    source = JJCOSSource(http=None)  # type: ignore[arg-type]
+    document = HTMLParser(
+        """
+        <article class="custom-article">
+          <figure class="img-box">
+            <a href="https://jjcos.com/post/Cosplay Eula/">
+              <img src="https://i1.wp.com/example/cover.webp">
+            </a>
+            <span class="breadcrumb-item date-overlay">2025-12-26</span>
+          </figure>
+          <a href="https://jjcos.com/tag/HSQ2151O0wZ/" class="tag"> #Cosplay </a>
+          <h3 class="fh5co-article-title">
+            <a href="https://jjcos.com/post/Cosplay Eula/">Cosplay Eula</a>
+          </h3>
+        </article>
+        """
+    )
+    item = source.listing_items(document)[0]
+    assert item.path == "/post/Cosplay%20Eula/"
+    assert item.tags == ["Cosplay"]
+    assert item.published_at == "2025-12-26"
+    gallery = HTMLParser(
+        """
+        <h1 class="fh5co-article-title">Cosplay Eula - JJCOS</h1>
+        <div id="post-content">
+          <img src="https://i1.wp.com/example/1.webp">
+          <img src="https://i1.wp.com/example/2.webp">
+        </div>
+        <img src="https://jjcos.com/images/avatar.png">
+        """
+    )
+    assert source._page_images(gallery) == [
+        "https://i1.wp.com/example/1.webp",
+        "https://i1.wp.com/example/2.webp",
+    ]
+
+
+def test_xasiat_listing_and_get_image_urls() -> None:
+    source = XasiatSource(http=None)  # type: ignore[arg-type]
+    document = HTMLParser(
+        """
+        <div class="list-albums">
+          <div class="item">
+            <a href="https://www.xasiat.com/albums/37440/eula/" title="[Cosplay] Eula [69P24V]">
+              <img class="thumb lazy-load" data-original="https://pic.example/preview.jpg">
+              <strong class="title">[Cosplay] Eula [69P24V]</strong>
+              <div class="photos">69 photos</div>
+            </a>
+          </div>
+        </div>
+        """
+    )
+    item = source.listing_items(document)[0]
+    assert item.path == "/albums/37440/eula/"
+    assert item.image_count == 69
+    assert item.has_video is True
+    gallery = HTMLParser(
+        """
+        <a href="https://www.xasiat.com/get_image/2/abc/sources/1.jpg/?i-acctoken=tok" class="item">
+          <img class="thumb">
+        </a>
+        <a href="/albums/categories/cosplay/">Cosplay</a>
+        """
+    )
+    assert source._page_images(gallery) == [
+        "https://www.xasiat.com/get_image/2/abc/sources/1.jpg/?i-acctoken=tok"
+    ]
+
+
+def test_baobua_listing_and_fullsize_images() -> None:
+    source = BaoBuaSource(http=None)  # type: ignore[arg-type]
+    document = HTMLParser(
+        """
+        <link rel="next" href="https://baobua.net/category/Cosplay?page=2">
+        <div class="thumb-view">
+          <a href="/spot/abc.html" title="Sexy Dust Hunter">
+            <img class="play_img" src="/privid2/play_m.png">
+            <img class="xld" src="https://blogger.googleusercontent.com/img/s320/cover.jpg">
+          </a>
+        </div>
+        """
+    )
+    item = source.listing_items(document)[0]
+    assert item.path == "/spot/abc.html"
+    assert item.title == "Sexy Dust Hunter"
+    gallery = HTMLParser(
+        """
+        <title>BaoBua.Net: Sexy Dust Hunter | Page 1/2</title>
+        <img src="https://blogger.googleusercontent.com/img/b/xxx/s0/Horny_Maid%20(1).jpg">
+        <img src="https://blogger.googleusercontent.com/img/b/xxx/s320/sidebar.jpg">
+        <script>var initRelated= { tag: ["Cosplay","maid"] };</script>
+        <a class="page-numbers" href="/spot/abc.html?page=2">Next ></a>
+        """
+    )
+    assert source._title(gallery) == "Sexy Dust Hunter"
+    assert source._page_images(gallery) == [
+        "https://blogger.googleusercontent.com/img/b/xxx/s0/Horny_Maid%20(1).jpg"
+    ]
+    assert source._tags(gallery.html or "") == ["Cosplay", "maid"]
+    assert source._next_page(gallery, "https://baobua.net/spot/abc.html") == (
+        "https://baobua.net/spot/abc.html?page=2"
+    )
+
+
+def test_buondua_defaults_to_the_cosplay_tag() -> None:
+    source = BuonDuaSource(http=None)  # type: ignore[arg-type]
+    assert source.id == "buondua"
+    assert source.supports_latest is False
+    assert source._tag_url("cosplay-10688", 1) == "https://buondua.com/tag/cosplay-10688"
+    assert source._tag_url("cosplay-10688", 2) == "https://buondua.com/tag/cosplay-10688?start=20"
+
+
+def test_simplycosplay_rejects_unknown_gallery_kinds() -> None:
+    source = SimplyCosplaySource(http=None)  # type: ignore[arg-type]
+    items = source._listing_items({"data": [{"title": "leak", "slug": "secret", "type": "user"}]})
+    assert items == []
+    with pytest.raises(SourceError, match="not a gallery"):
+        source._kind_and_slug("/user/secret")
+    with pytest.raises(SourceError, match="not a gallery"):
+        source._kind_and_slug("/v2/admin/token")
+
+
+def test_jjcos_index_requires_posts_and_matches_tags() -> None:
+    with pytest.raises(SourceError, match="missing posts"):
+        posts_from_index({"status": "ok"})
+    with pytest.raises(SourceError, match="not a list"):
+        posts_from_index({"posts": {"title": "nope"}})
+    posts = posts_from_index(
+        {
+            "posts": [
+                {"title": "Portrait", "link": "/post/portrait/", "tags": ["Cosplay"]},
+                {"title": "Selfie", "link": "/post/selfie/", "tags": ["gravure"]},
+                {"title": "Eula Cosplay", "link": "/post/eula/"},
+            ]
+        }
+    )
+    assert [post["title"] for post in posts] == ["Portrait", "Eula Cosplay"]
+    assert "cosplay" in posts[0]["haystack"]
+
+
+def test_xasiat_search_category_filters_cosplay() -> None:
+    source = XasiatSource(http=None)  # type: ignore[arg-type]
+    assert looks_like_cosplay("[Cosplay] Eula", "/albums/1/eula/")
+    assert not looks_like_cosplay("Gravure set", "/albums/2/gravure/")
+    assert source._require_search_category(None) is None
+    assert source._require_search_category("Cosplay") == "cosplay"
+    with pytest.raises(SourceError, match="only supports the cosplay category"):
+        source._require_search_category("gravure")
+
+
+def test_baobua_search_stays_on_the_site_query_string() -> None:
+    source = BaoBuaSource(http=None)  # type: ignore[arg-type]
+    assert source._search_url("eula", 1) == "https://baobua.net/?s=eula"
+    assert source._search_url("eula", 2) == "https://baobua.net/?s=eula&page=2"
+
+
+def test_buondua_parses_listing_and_gallery_html() -> None:
+    listing_html = """
+    <div class="items-row">
+      <a class="item-link" href="/eula-cosplay-1/">
+        <img src="https://buondua.com/thumb.webp">
+        <h2>Eula Cosplay</h2>
+      </a>
+    </div>
+    """
+    kiutaku = KiutakuSource(http=None)  # type: ignore[arg-type]
+    buondua = BuonDuaSource(http=None)  # type: ignore[arg-type]
+    document = HTMLParser(listing_html)
+    assert kiutaku.listing_items(document) == []
+    item = buondua.listing_items(document)[0]
+    assert item.path == "/eula-cosplay-1/"
+    assert item.title == "Eula Cosplay"
+    assert item.thumbnail_url == "https://buondua.com/thumb.webp"
+    gallery = HTMLParser(
+        """
+        <div class="article-header">Eula Cosplay - (Page 1 / 2)</div>
+        <div class="article-fulltext">
+          <img src="https://buondua.com/1.webp">
+          <img src="https://buondua.com/2.webp">
+        </div>
+        """
+    )
+    assert buondua._gallery_title(gallery) == "Eula Cosplay"
+    assert buondua._page_images(gallery) == [
+        "https://buondua.com/1.webp",
+        "https://buondua.com/2.webp",
     ]

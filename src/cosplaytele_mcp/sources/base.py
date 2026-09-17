@@ -30,6 +30,7 @@ class GallerySource(ABC):
     popular_kind: ClassVar[Literal["ranking", "archive", "featured"]] = "ranking"
     ranking_kinds: ClassVar[tuple[str, ...]] = ()
     category_names: ClassVar[tuple[str, ...]] = ()
+    extra_hosts: ClassVar[tuple[str, ...]] = ()
     image_request_headers: ClassVar[dict[str, str]] = {}
 
     def __init__(self, http: Http) -> None:
