@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 RETRY_ATTEMPTS = 3
 RETRY_BACKOFF = 0.4
 RETRY_STATUSES = frozenset({429, 502, 503, 504})
-HTTP_LIMITS = httpx.Limits(max_connections=20, max_keepalive_connections=10)
+HTTP_LIMITS = httpx.Limits(max_connections=32, max_keepalive_connections=16)
 HTTP_TIMEOUT = httpx.Timeout(30.0, connect=15.0)
 CACHE_TTL = 60.0
 CACHE_SIZE = 128
@@ -84,21 +84,24 @@ class Http:
         *,
         referer: str | None = None,
         params: dict[str, Any] | None = None,
+        headers: dict[str, str] | None = None,
         timeout: float | httpx.Timeout | object | None = USE_CLIENT_TIMEOUT,
         cache: bool = True,
     ) -> httpx.Response:
         self._validate_url(url)
-        key = _cache_key(url, params)
+        request_headers = dict(headers or {})
+        if referer:
+            request_headers.setdefault("Referer", referer)
+        key = _cache_key(url, params, request_headers)
         if cache:
             cached = self._cache_take(key)
             if cached is not None:
                 return cached
-        headers = {"Referer": referer} if referer else {}
         last_error: BaseException | None = None
         for attempt in range(RETRY_ATTEMPTS):
             try:
                 response = await self._get_following_safe_redirects(
-                    url, params=params, headers=headers, timeout=timeout
+                    url, params=params, headers=request_headers, timeout=timeout
                 )
                 if response.status_code in RETRY_STATUSES and attempt < RETRY_ATTEMPTS - 1:
                     logger.debug("retryable HTTP %s for %s", response.status_code, url)
@@ -114,7 +117,7 @@ class Http:
                     raise
                 # A few upstream CDNs occasionally send a bad Content-Encoding header.
                 # Retry without compression so the body can still be parsed safely.
-                headers = {**headers, "Accept-Encoding": "identity"}
+                request_headers = {**request_headers, "Accept-Encoding": "identity"}
                 logger.debug("retrying %s after response decoding failure", url)
                 await asyncio.sleep(RETRY_BACKOFF * (attempt + 1))
             except (httpx.TimeoutException, httpx.ConnectError, httpx.RemoteProtocolError) as exc:
@@ -170,8 +173,16 @@ class Http:
         ):
             raise OutboundUrlError(f"Host {host!r} is not an allowed source site", request=None)
 
-    async def get_html(self, url: str, *, referer: str | None = None) -> HTMLParser:
-        response = await self.get(url, referer=referer)
+    async def get_html(
+        self,
+        url: str,
+        *,
+        referer: str | None = None,
+        params: dict[str, Any] | None = None,
+        headers: dict[str, str] | None = None,
+        cache: bool = True,
+    ) -> HTMLParser:
+        response = await self.get(url, referer=referer, params=params, headers=headers, cache=cache)
         return HTMLParser(response.text)
 
     async def get_json(
@@ -180,9 +191,18 @@ class Http:
         *,
         referer: str | None = None,
         params: dict[str, Any] | None = None,
+        headers: dict[str, str] | None = None,
         timeout: float | httpx.Timeout | object | None = USE_CLIENT_TIMEOUT,
+        cache: bool = True,
     ) -> Any:
-        response = await self.get(url, referer=referer, params=params, timeout=timeout)
+        response = await self.get(
+            url,
+            referer=referer,
+            params=params,
+            headers=headers,
+            timeout=timeout,
+            cache=cache,
+        )
         return response.json()
 
     def _cache_take(self, key: str) -> httpx.Response | None:
@@ -219,11 +239,22 @@ class Http:
             self._cache.popitem(last=False)
 
 
-def _cache_key(url: str, params: dict[str, Any] | None) -> str:
-    if not params:
-        return url
-    items = sorted((str(key), str(value)) for key, value in params.items())
-    return f"{url}?{urlencode(items)}"
+def _cache_key(
+    url: str,
+    params: dict[str, Any] | None,
+    headers: dict[str, str] | None = None,
+) -> str:
+    key = url
+    if params:
+        items = sorted((str(name), str(value)) for name, value in params.items())
+        key = f"{url}?{urlencode(items)}"
+    if headers:
+        extra = sorted(
+            (name.lower(), value) for name, value in headers.items() if name.lower() != "referer"
+        )
+        if extra:
+            key = f"{key}#{urlencode(extra)}"
+    return key
 
 
 def _response_from_cache(entry: _CacheEntry) -> httpx.Response:

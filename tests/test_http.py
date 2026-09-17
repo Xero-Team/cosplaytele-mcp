@@ -163,3 +163,29 @@ async def test_http_rejects_redirects_outside_source_allowlist() -> None:
         with pytest.raises(OutboundUrlError, match="not an allowed source"):
             await http.get("https://cosplaytele.com/probe/")
     assert requested == ["https://cosplaytele.com/probe/"]
+
+
+@pytest.mark.anyio
+async def test_http_extra_headers_are_sent_and_cached_separately() -> None:
+    seen: list[str | None] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.headers.get("x-requested-with"))
+        body = b"xhr" if request.headers.get("x-requested-with") else b"full"
+        return httpx.Response(200, content=body)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        http = Http(client)
+        xhr = await http.get(
+            "https://example.com/albums/",
+            headers={"X-Requested-With": "XMLHttpRequest"},
+        )
+        full = await http.get("https://example.com/albums/")
+        xhr_again = await http.get(
+            "https://example.com/albums/",
+            headers={"X-Requested-With": "XMLHttpRequest"},
+        )
+    assert xhr.content == b"xhr"
+    assert full.content == b"full"
+    assert xhr_again.content == b"xhr"
+    assert seen == ["XMLHttpRequest", None]
