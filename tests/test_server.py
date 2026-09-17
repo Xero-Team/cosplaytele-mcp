@@ -144,7 +144,7 @@ async def test_image_content_uses_asset_referer_and_is_not_cached() -> None:
 
     asset = ImageAsset(
         url="https://static.example.com/image.webp",
-        headers={"Referer": "https://example.com/"},
+        headers={"Referer": "https://example.com/", "User-Agent": "Mozilla/5.0"},
     )
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
         http = Http(client, allowed_hosts=("https://example.com",))
@@ -156,6 +156,7 @@ async def test_image_content_uses_asset_referer_and_is_not_cached() -> None:
     assert second.data == first.data
     assert len(requests) == 2
     assert requests[0].headers["referer"] == "https://example.com/"
+    assert requests[0].headers["user-agent"] == "Mozilla/5.0"
 
 
 @pytest.mark.anyio
@@ -333,6 +334,30 @@ async def test_search_keeps_completed_results_when_total_budget_expires(
     assert [item["title"] for item in payload["items"]] == ["Miku"]
     assert payload["errors"][0]["code"] == "timeout"
     assert "timed out" in payload["errors"][0]["message"]
+
+
+@pytest.mark.anyio
+async def test_search_all_finishes_every_searchable_source(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from cosplaytele_mcp.server import SEARCH_CONCURRENCY, SEARCHABLE_SOURCE_COUNT
+    from cosplaytele_mcp.sources import SOURCE_TYPES
+
+    assert SEARCH_CONCURRENCY >= SEARCHABLE_SOURCE_COUNT
+    searchable = [cls.id for cls in SOURCE_TYPES if cls.supports_search]
+    assert len(searchable) == SEARCHABLE_SOURCE_COUNT
+    registry = StubSearchRegistry(
+        [StubSearchSource(source_id, search_page(source_id, source_id)) for source_id in searchable]
+    )
+    monkeypatch.setattr("cosplaytele_mcp.server.SourceRegistry", lambda http: registry)
+    async with Client(mcp, raise_exceptions=True) as connected:
+        result = await connected.call_tool("search", {"query": "miku", "source": "all"})
+    assert result.is_error is not True
+    payload = result.structured_content
+    assert payload is not None
+    titles = {item["title"] for item in payload["items"]}
+    assert titles == set(searchable)
+    assert payload["errors"] == []
 
 
 @pytest.mark.anyio

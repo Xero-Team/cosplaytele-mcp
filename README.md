@@ -113,6 +113,11 @@ cosplaytele-mcp --transport streamable-http --host 0.0.0.0 --port 8000 \
 | `ososedki` | https://ososedki.com | `/api/albums?type=top` | `/api/albums` | `type=search` |
 | `mitaku` | https://mitaku.net | `/category/ero-cosplay/` | 无 | `?s=` |
 | `lovecutes` | https://www.lovecutes.com/type/6/ | Cosplay 分类（`type/6`） | 无 | 全站搜索后仅保留 Cosplay 分类 |
+| `simplycosplay` | https://www.simply-cosplay.com | API `sort=hot` | API `sort=new` | `api.simply-porn.com/v2/search` |
+| `jjcos` | https://jjcos.com/tag/HSQ2151O0wZ/ | Cosplay 标签归档 | 无 | `/api/index.html` 标题过滤 |
+| `buondua` | https://buondua.com/tag/cosplay-10688 | Cosplay 标签归档 | 无 | `?search=` |
+| `xasiat` | https://www.xasiat.com/albums/categories/cosplay/ | `sort_by=album_viewed_week` | `sort_by=post_date` | `/search/search/` |
+| `baobua` | https://baobua.net/category/Cosplay | Cosplay 分类归档 | 无 | 全站 `?s=` |
 
 ## 工具
 
@@ -123,7 +128,7 @@ cosplaytele-mcp --transport streamable-http --host 0.0.0.0 --port 8000 \
 - `browse_tag(source, tag, page=1, exclude_ai=true)`：按标签列出
 - `related(source, path, page=1, exclude_ai=true)`：相近套图。CosplayTele 走 Contextual Related Posts；其余源用图集第一个标签
 - `get_gallery(source, path, offset=0, limit=20)`：详情和图片 URL。默认只回前 20 张加 `image_count`；`limit=0` 只回元数据。`path` 用列表或搜索结果里的 `path`，也接受完整帖子 URL。`image_assets` 为每个 `image_urls` 条目附带源站要求的请求头；可能带 `download_urls`、`has_video`（有视频时只打标，不返回可播放流）
-- `fetch_image(source, path, index)`：按需取图集中的一张，按 `image_assets` 的请求头请求源站，并返回 MCP `ImageContent`。不写本地文件，不下载整套图集；单图上限 20 MiB，较大的原图请用 `image_assets` 自行请求。
+- `fetch_image(source, path, index)`：按需取图集中的一张，按 `image_assets` 的请求头请求源站，并返回 MCP `ImageContent`。只拉取源站 allowlist 上的 URL；JJCOS（`i1.wp.com`）、BaoBua（`blogger.googleusercontent.com`）、Simply Cosplay 独立 CDN 会被拒绝，请改用 `image_assets` 自行请求。不写本地文件，不下载整套图集；单图上限 20 MiB，较大的原图同样用 `image_assets`。
 
 列表项在源站提供时带 `tags`、`published_at`、`image_count`、`has_video`。没有的字段为 `null` / 空列表，不会为凑字段再打详情。年龄语义容易被误判的制服主题词（如 `JK`、`校服`、`制服`、`school girl`、`school uniform`、`after school`）会在标题和标签中追加 `(18+)`；路径、搜索词和源站原始标识不变。
 
@@ -155,6 +160,11 @@ CosplayTele 的 `category` 除表内 slug 外，也接受模特/作品分类 slu
 | FoamGirl | `/?s=`，默认浏览 `/cosplay` |
 | OSOSEDKI | `/api/albums?type=search` |
 | Mitaku | `/?s=` |
+| Simply Cosplay | `api.simply-porn.com/v2/search?query=` |
+| JJCOS | `/api/index.html` 缓存后按标题/链接/标签过滤 Cosplay；默认浏览 Cosplay 标签 |
+| Buon Dua | `?search=`；默认浏览 `/tag/cosplay-10688` |
+| Xasiat | `/search/search/` XHR block；`category=cosplay` 时按标题/路径过滤；默认浏览 Cosplay 相册分类 |
+| BaoBua | 全站 `/?s=`（无法锁到 Cosplay 分类）；默认浏览 `/category/Cosplay` |
 
 资源：`sources://catalog`、`gallery://{source}/{+path}`。提示词：`find_gallery`。
 
