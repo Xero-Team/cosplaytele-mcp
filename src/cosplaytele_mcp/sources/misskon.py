@@ -7,7 +7,12 @@ from selectolax.parser import HTMLParser
 from cosplaytele_mcp.htmlutil import abs_url, attr, img_src, path_of, slugify, text_of
 from cosplaytele_mcp.models import Gallery, ListingItem, ListingPage, needed_images
 from cosplaytele_mcp.sources.base import GallerySource, SourceError
-from cosplaytele_mcp.wordpress import fetch_wp_posts, fetch_wp_tag_id, listing_from_posts
+from cosplaytele_mcp.wordpress import (
+    fetch_wp_posts,
+    fetch_wp_tag_id,
+    fetch_wp_term_id,
+    listing_from_posts,
+)
 
 
 class MissKonSource(GallerySource):
@@ -26,39 +31,43 @@ class MissKonSource(GallerySource):
 
     async def latest(self, page: int, category: str | None = None) -> ListingPage:
         if not category:
-            return await self._category_posts("cosplay", page)
+            return await self._wp_or_tag("cosplay", page)
         return await self._category_posts(category, page)
 
     async def search(
         self, query: str, page: int, category: str | None, exclude_ai: bool = True
     ) -> ListingPage:
-        if query.strip():
+        text = query.strip()
+        if text:
             extra: dict[str, str] = {}
             if category:
-                category_id = await self._category_id(category)
-                extra["categories"] = str(category_id)
+                extra.update(await self._term_filter(category))
             if exclude_ai:
                 await self._exclude_ai(extra)
-            return await self._wp_posts(page, search=query.strip(), extra=extra)
+            return await self._wp_posts(page, search=text, extra=extra)
         return await self.latest(page, category)
 
     async def _category_posts(self, category: str, page: int) -> ListingPage:
-        return await self._wp_posts(
-            page, extra={"categories": str(await self._category_id(category))}
-        )
-
-    async def _category_id(self, category: str) -> int:
-        from cosplaytele_mcp.wordpress import fetch_wp_term_id
-
-        category_id = await fetch_wp_term_id(
-            self.http,
-            f"{self.base_url}/wp-json/wp/v2/categories",
-            referer=f"{self.base_url}/",
-            term=category,
-        )
+        category_id = await self._term_id("categories", category)
         if category_id is None:
-            raise SourceError(f"MissKon category slug not found: {category}")
-        return category_id
+            # "cosplay" (and friends) are registered as tags on MissKon now.
+            return await self._wp_or_tag(category, page)
+        return await self._wp_posts(page, extra={"categories": str(category_id)})
+
+    async def _term_filter(self, term: str) -> dict[str, str]:
+        category_id = await self._term_id("categories", term)
+        if category_id is not None:
+            return {"categories": str(category_id)}
+        tag_id = await self._term_id("tags", term)
+        return {"tags": str(tag_id)} if tag_id is not None else {}
+
+    async def _term_id(self, taxonomy: str, term: str) -> int | None:
+        return await fetch_wp_term_id(
+            self.http,
+            f"{self.base_url}/wp-json/wp/v2/{taxonomy}",
+            referer=f"{self.base_url}/",
+            term=term,
+        )
 
     async def by_tag(self, tag: str, page: int, exclude_ai: bool = True) -> ListingPage:
         slug = slugify(tag)

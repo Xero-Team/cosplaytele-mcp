@@ -1,3 +1,4 @@
+import httpx
 import pytest
 from selectolax.parser import HTMLParser
 
@@ -9,6 +10,7 @@ from cosplaytele_mcp.htmlutil import (
     normalize_path,
     slugify,
 )
+from cosplaytele_mcp.http import Http
 from cosplaytele_mcp.models import ListingItem, ListingPage, SearchHit, needed_images, window_images
 from cosplaytele_mcp.server import interleave_hits
 from cosplaytele_mcp.sources import SourceError, SourceRegistry, source_allowed_hosts
@@ -19,6 +21,7 @@ from cosplaytele_mcp.sources.hentaicosplay import HentaiCosplaySource
 from cosplaytele_mcp.sources.jjcos import JJCOSSource, posts_from_index
 from cosplaytele_mcp.sources.kiutaku import KiutakuSource
 from cosplaytele_mcp.sources.lovecutes import LoveCutesSource
+from cosplaytele_mcp.sources.misskon import MissKonSource
 from cosplaytele_mcp.sources.ososedki import OsosedkiSource
 from cosplaytele_mcp.sources.simplycosplay import SimplyCosplaySource, token_from_script
 from cosplaytele_mcp.sources.xasiat import XasiatSource, looks_like_cosplay
@@ -187,25 +190,64 @@ def test_hentaicosplay_ranking_url() -> None:
         source._ranking_url(1, "like", "last7days")
 
 
-def test_cosplaytele_wp_search_item() -> None:
+def test_cosplaytele_html_listing_items() -> None:
     source = CosplayTeleSource(http=None)  # type: ignore[arg-type]
-    item = source._from_wp_post(
-        {
-            "title": {"rendered": "Yaokoututu cosplay Ryuuge Kisaki &#8211; Blue Archive"},
-            "link": "https://cosplaytele.com/ryuuge-kisaki-4/",
-            "date": "2026-09-09T18:22:18",
-            "_embedded": {
-                "wp:featuredmedia": [{"source_url": "https://cosplaytele.com/cover.webp"}],
-                "wp:term": [[{"name": "Blue Archive", "slug": "blue-archive"}]],
-            },
-        }
+    document = HTMLParser(
+        """
+        <div id="post-list">
+          <div class="col post-item">
+            <div class="box-image">
+              <a href="https://cosplaytele.com/ryuuge-kisaki-4/" class="plain"
+                 aria-label="Yaokoututu cosplay Ryuuge Kisaki &#8211; Blue Archive"></a>
+              <img src="https://cosplaytele.com/cover.webp" class="wp-post-image">
+            </div>
+            <div class="overlay-icon"><i class="icon-play"></i></div>
+            <h5 class="post-title"><a href="https://cosplaytele.com/ryuuge-kisaki-4/">
+              Yaokoututu cosplay Ryuuge Kisaki &#8211; Blue Archive
+            </a></h5>
+          </div>
+          <div class="col post-item">
+            <h5 class="post-title"><a href="https://cosplaytele.com/ai-art-girl/">
+              AI Art – Anime Girl
+            </a></h5>
+          </div>
+        </div>
+        """
     )
-    assert item.path == "/ryuuge-kisaki-4/"
-    assert "Kisaki" in item.title
-    assert "–" in item.title or "-" in item.title
-    assert item.thumbnail_url.endswith("cover.webp")
-    assert item.tags == ["Blue Archive"]
-    assert item.published_at == "2026-09-09"
+    items = source._items(document)
+    assert [item.path for item in items] == [
+        "/ryuuge-kisaki-4/",
+        "/ai-art-girl/",
+    ]
+    assert "Kisaki" in items[0].title
+    assert items[0].thumbnail_url == "https://cosplaytele.com/cover.webp"
+    assert items[0].has_video is True
+    assert items[0].is_ai is False
+    assert items[1].is_ai is True
+
+
+def test_cosplaytele_popular_items_use_footer_widget() -> None:
+    source = CosplayTeleSource(http=None)  # type: ignore[arg-type]
+    document = HTMLParser(
+        """
+        <div id="post-list">
+          <div class="col post-item">
+            <h5 class="post-title"><a href="https://cosplaytele.com/latest/">Latest</a></h5>
+          </div>
+        </div>
+        <div class="footer-widgets">
+          <div id="row-1" class="slider">
+            <div class="col post-item">
+              <p class="cat-label tag-label">Cosplay Nude Shenhe</p>
+              <h5 class="post-title"><a href="https://cosplaytele.com/popular/">Popular</a></h5>
+            </div>
+          </div>
+        </div>
+        """
+    )
+    items = source._popular_items(document)
+    assert [item.path for item in items] == ["/popular/"]
+    assert items[0].tags == ["Cosplay Nude Shenhe"]
 
 
 def test_hentaicosplay_mobile_item() -> None:
@@ -646,3 +688,39 @@ def test_buondua_parses_listing_and_gallery_html() -> None:
         "https://buondua.com/1.webp",
         "https://buondua.com/2.webp",
     ]
+
+
+@pytest.fixture
+def anyio_backend() -> str:
+    return "asyncio"
+
+
+@pytest.mark.anyio
+async def test_misskon_latest_browses_the_cosplay_tag() -> None:
+    seen: list[str] = []
+    post_entry = {
+        "title": {"rendered": "Coser@Eula"},
+        "link": "https://misskon.com/123-eula/",
+        "date": "2026-09-01T00:00:00",
+        "content": {"rendered": "<img src='https://misskon.com/a.webp'>"},
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        url = str(request.url)
+        seen.append(url)
+        if "/wp-json/wp/v2/categories" in url:
+            return httpx.Response(200, json=[])
+        if "/wp-json/wp/v2/tags" in url:
+            return httpx.Response(200, json=[{"id": 353, "slug": "cosplay"}])
+        return httpx.Response(200, json=[post_entry], headers={"x-wp-totalpages": "1"})
+
+    transport = httpx.MockTransport(handler)
+    async with httpx.AsyncClient(transport=transport, base_url="https://misskon.com") as client:
+        source = MissKonSource(Http(client))
+        page = await source.latest(1)
+
+    assert [item.path for item in page.items] == ["/123-eula/"]
+    posts_call = next(url for url in seen if "/wp-json/wp/v2/posts" in url)
+    assert "tags=353" in posts_call
+    assert "categories=" not in posts_call
+    assert not any(url.endswith("/tag/cosplay/") for url in seen)
