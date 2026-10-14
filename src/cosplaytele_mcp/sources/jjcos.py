@@ -4,7 +4,7 @@ import time
 from typing import Any
 from urllib.parse import quote, unquote
 
-from selectolax.parser import HTMLParser
+from selectolax.lexbor import LexborHTMLParser as HTMLParser
 
 from cosplaytele_mcp.htmlutil import abs_url, attr, img_src, path_of, text_of
 from cosplaytele_mcp.http import Http

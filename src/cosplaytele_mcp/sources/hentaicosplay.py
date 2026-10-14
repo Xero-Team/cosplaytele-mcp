@@ -4,7 +4,7 @@ import re
 from typing import ClassVar
 from urllib.parse import quote
 
-from selectolax.parser import HTMLParser, Node
+from selectolax.lexbor import LexborHTMLParser as HTMLParser, LexborNode as Node
 
 from cosplaytele_mcp.htmlutil import (
     abs_url,

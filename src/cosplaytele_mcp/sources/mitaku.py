@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from urllib.parse import quote, urlencode
 
-from selectolax.parser import HTMLParser
+from selectolax.lexbor import LexborHTMLParser as HTMLParser
 
 from cosplaytele_mcp.htmlutil import (
     abs_url,

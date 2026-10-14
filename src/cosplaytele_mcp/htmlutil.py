@@ -4,7 +4,7 @@ import re
 from html import unescape
 from urllib.parse import urljoin, urlparse, urlsplit
 
-from selectolax.parser import Node
+from selectolax.lexbor import LexborNode as Node
 
 SLUG_STRIP_RE = re.compile(r"[^\w\s-]", re.UNICODE)
 SLUG_DASH_RE = re.compile(r"[-\s]+")

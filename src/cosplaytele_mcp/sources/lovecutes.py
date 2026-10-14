@@ -4,7 +4,7 @@ import json
 import re
 from urllib.parse import urlencode
 
-from selectolax.parser import HTMLParser, Node
+from selectolax.lexbor import LexborHTMLParser as HTMLParser, LexborNode as Node
 
 from cosplaytele_mcp.htmlutil import abs_url, attr, img_src, path_of, text_of
 from cosplaytele_mcp.models import Gallery, ListingItem, ListingPage, needed_images

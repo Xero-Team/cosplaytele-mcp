@@ -5,7 +5,7 @@ from html import unescape
 from urllib.parse import quote
 
 import httpx
-from selectolax.parser import HTMLParser
+from selectolax.lexbor import LexborHTMLParser as HTMLParser
 
 from cosplaytele_mcp.ai import looks_like_ai
 from cosplaytele_mcp.htmlutil import (

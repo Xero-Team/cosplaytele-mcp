@@ -1,6 +1,6 @@
 import httpx
 import pytest
-from selectolax.parser import HTMLParser
+from selectolax.lexbor import LexborHTMLParser as HTMLParser
 
 from cosplaytele_mcp.ai import apply_ai_filter, looks_like_ai
 from cosplaytele_mcp.htmlutil import (

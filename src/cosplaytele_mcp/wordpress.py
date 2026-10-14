@@ -4,7 +4,7 @@ import re
 from html import unescape
 from typing import Any
 
-from selectolax.parser import HTMLParser
+from selectolax.lexbor import LexborHTMLParser as HTMLParser
 
 from cosplaytele_mcp.htmlutil import abs_url, img_src, looks_like_video, path_of, slugify
 from cosplaytele_mcp.http import USE_CLIENT_TIMEOUT, Http
