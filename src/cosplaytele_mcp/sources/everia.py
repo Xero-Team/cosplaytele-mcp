@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from cosplaytele_mcp.htmlutil import attr, text_of
+from cosplaytele_mcp.http import USE_CLIENT_TIMEOUT
 from cosplaytele_mcp.models import Gallery, ListingPage, needed_images
 from cosplaytele_mcp.sources.base import GallerySource, SourceError
 from cosplaytele_mcp.wordpress import (
@@ -12,6 +13,10 @@ from cosplaytele_mcp.wordpress import (
 )
 
 COSPLAY_CATEGORY = "7"
+# Everia's WordPress search runs an unindexed full-text query and regularly takes
+# 30-90s, beyond the client-wide 30s timeout. One attempt with a longer budget
+# succeeds far more often than three 30s attempts.
+SEARCH_TIMEOUT = 90.0
 CATEGORY_SLUGS = {
     "cosplay": "cosplay",
     "japan": "japan",
@@ -136,6 +141,7 @@ class EveriaSource(GallerySource):
     async def _posts(
         self, page: int, search: str = "", extra: dict[str, str] | None = None
     ) -> ListingPage:
+        slow_search = bool(search.strip())
         posts, has_next = await fetch_wp_posts(
             self.http,
             self._posts_url(),
@@ -143,5 +149,7 @@ class EveriaSource(GallerySource):
             referer=f"{self.base_url}/",
             search=search or None,
             extra=extra,
+            timeout=SEARCH_TIMEOUT if slow_search else USE_CLIENT_TIMEOUT,
+            retry=not slow_search,
         )
         return listing_from_posts(self.id, page, posts, has_next)

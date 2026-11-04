@@ -1,17 +1,19 @@
 from __future__ import annotations
 
 import re
+from typing import TYPE_CHECKING
 from urllib.parse import urlencode
-
-from selectolax.lexbor import LexborHTMLParser as HTMLParser
 
 from cosplaytele_mcp.htmlutil import abs_url, attr, img_src, path_of, text_of
 from cosplaytele_mcp.models import Gallery, ListingItem, ListingPage, needed_images
 from cosplaytele_mcp.sources.base import GallerySource, SourceError
 
-TITLE_PREFIX_RE = re.compile(r"^BaoBua\.Net:\s*", re.I)
-PAGE_SUFFIX_RE = re.compile(r"\s*\|\s*Page\s+\d+\s*/\s*\d+\s*$", re.I)
-RELATED_TAGS_RE = re.compile(r"tag:\s*\[(.*?)\]", re.S)
+if TYPE_CHECKING:
+    from selectolax.lexbor import LexborHTMLParser as HTMLParser
+
+TITLE_PREFIX_RE = re.compile(r"^BaoBua\.Net:\s*", re.IGNORECASE)
+PAGE_SUFFIX_RE = re.compile(r"\s*\|\s*Page\s+\d+\s*/\s*\d+\s*$", re.IGNORECASE)
+RELATED_TAGS_RE = re.compile(r"tag:\s*\[(.*?)\]", re.DOTALL)
 TAG_ITEM_RE = re.compile(r'"([^"]+)"')
 
 

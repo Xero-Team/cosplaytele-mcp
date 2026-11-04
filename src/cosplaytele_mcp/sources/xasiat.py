@@ -1,18 +1,19 @@
 from __future__ import annotations
 
 import re
-from typing import ClassVar
-
-from selectolax.lexbor import LexborHTMLParser as HTMLParser
+from typing import TYPE_CHECKING, ClassVar
 
 from cosplaytele_mcp.htmlutil import abs_url, attr, img_src, path_of, text_of
 from cosplaytele_mcp.models import Gallery, ListingItem, ListingPage, needed_images
 from cosplaytele_mcp.sources.base import GallerySource, SourceError
 
+if TYPE_CHECKING:
+    from selectolax.lexbor import LexborHTMLParser as HTMLParser
+
 ITEMS_PER_PAGE = 12
 COSPLAY_PATH = "albums/categories/cosplay"
-PHOTOS_RE = re.compile(r"(\d+)\s*photos?", re.I)
-VIDEO_RE = re.compile(r"\d+\s*V\b", re.I)
+PHOTOS_RE = re.compile(r"(\d+)\s*photos?", re.IGNORECASE)
+VIDEO_RE = re.compile(r"\d+\s*V\b", re.IGNORECASE)
 XHR_HEADERS = {"X-Requested-With": "XMLHttpRequest"}
 
 

@@ -1,15 +1,17 @@
 from __future__ import annotations
 
 import time
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from urllib.parse import quote, unquote
 
-from selectolax.lexbor import LexborHTMLParser as HTMLParser
-
 from cosplaytele_mcp.htmlutil import abs_url, attr, img_src, path_of, text_of
-from cosplaytele_mcp.http import Http
 from cosplaytele_mcp.models import Gallery, ListingItem, ListingPage, needed_images
 from cosplaytele_mcp.sources.base import GallerySource, SourceError
+
+if TYPE_CHECKING:
+    from selectolax.lexbor import LexborHTMLParser as HTMLParser
+
+    from cosplaytele_mcp.http import Http
 
 COSPLAY_TAG = "HSQ2151O0wZ"
 PAGE_SIZE = 20

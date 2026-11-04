@@ -1,6 +1,6 @@
 [project]
 name = "cosplaytele-mcp"
-version = "0.6.1"
+version = "0.6.2"
 description = "MCP 2 server for CosplayTele and related gallery sites"
 readme = "README.md"
 requires-python = ">=3.14"
@@ -48,32 +48,68 @@ src = ["src", "tests"]
 
 [tool.ruff.lint]
 select = [
+    "A",
+    "ASYNC",
+    "B",
+    "C4",
+    "C90",
+    "DTZ",
     "E",
     "F",
-    "W",
+    "FURB",
+    "G",
     "I",
-    "UP",
-    "B",
-    "SIM",
-    "RUF",
-    "ASYNC",
+    "ISC",
+    "N",
+    "PERF",
+    "PIE",
+    "PL",
+    "PTH",
     "PT",
-    "C4",
+    "RET",
+    "RSE",
+    "RUF",
+    "S",
+    "SIM",
+    "TC",
+    "TID",
+    "TRY",
+    "UP",
+    "W",
 ]
 ignore = [
     "E501",
     "B008",
     "RUF001",
+    # Literal HTTP status codes, page sizes, and fixture counts read better inline.
+    "PLR2004",
+    # Raises inside try blocks are converted to tool errors at the MCP boundary.
+    "TRY301",
+    # Exception messages carry the source-specific context that makes them actionable.
+    "TRY003",
 ]
+
+[tool.ruff.lint.pylint]
+# The HTTP client and file helpers intentionally expose several keyword parameters.
+max-args = 10
 
 [tool.ruff.lint.isort]
 known-first-party = ["cosplaytele_mcp"]
 combine-as-imports = true
 
 [tool.ruff.lint.per-file-ignores]
-# These client boundary methods expose HTTPX's per-request timeout API.
-"src/cosplaytele_mcp/http.py" = ["ASYNC109"]
+# These client boundary methods expose HTTPX's per-request timeout API and raw JSON.
+"src/cosplaytele_mcp/http.py" = ["ANN401", "ASYNC109"]
 "src/cosplaytele_mcp/wordpress.py" = ["ASYNC109"]
+# MCP evaluates tool and middleware annotations at runtime, so those imports stay live.
+"src/cosplaytele_mcp/server.py" = ["PLR0915", "PLR0917", "TC001", "TC002", "TC003"]
+# make_gallery exposes the full gallery schema in one keyword-only call.
+"src/cosplaytele_mcp/sources/base.py" = ["PLR0913"]
+# Source implementations match the shared protocol but may not need every argument.
+"src/cosplaytele_mcp/sources/*.py" = ["ARG002"]
+# Upstream API payloads are untyped JSON until each source validates them.
+"src/cosplaytele_mcp/sources/simplycosplay.py" = ["ANN401"]
+"tests/*.py" = ["S101", "S104", "SLF001"]
 
 [tool.ruff.format]
 quote-style = "double"

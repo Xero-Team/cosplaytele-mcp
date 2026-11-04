@@ -1,16 +1,17 @@
 from __future__ import annotations
 
 import re
-from typing import ClassVar
+from typing import TYPE_CHECKING, ClassVar
 from urllib.parse import urlencode
-
-from selectolax.lexbor import LexborHTMLParser as HTMLParser
 
 from cosplaytele_mcp.htmlutil import abs_url, attr, img_src, path_of, text_of
 from cosplaytele_mcp.models import Gallery, ListingItem, ListingPage, needed_images
 from cosplaytele_mcp.sources.base import GallerySource, SourceError
 
-PAGE_SUFFIX_RE = re.compile(r"\s*-\s*\(\s*Page\s+\d+\s*/\s*\d+\s*\)\s*$", re.I)
+if TYPE_CHECKING:
+    from selectolax.lexbor import LexborHTMLParser as HTMLParser
+
+PAGE_SUFFIX_RE = re.compile(r"\s*-\s*\(\s*Page\s+\d+\s*/\s*\d+\s*\)\s*$", re.IGNORECASE)
 
 
 class KiutakuSource(GallerySource):

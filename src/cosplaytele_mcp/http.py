@@ -87,33 +87,26 @@ class Http:
         headers: dict[str, str] | None = None,
         timeout: float | httpx.Timeout | object | None = USE_CLIENT_TIMEOUT,
         cache: bool = True,
+        retry: bool = True,
     ) -> httpx.Response:
         self._validate_url(url)
         request_headers = dict(headers or {})
         if referer:
             request_headers.setdefault("Referer", referer)
         key = _cache_key(url, params, request_headers)
-        if cache:
-            cached = self._cache_take(key)
-            if cached is not None:
-                return cached
+        cached = self._cache_take(key) if cache else None
+        if cached is not None:
+            return cached
         last_error: BaseException | None = None
-        for attempt in range(RETRY_ATTEMPTS):
+        attempts = RETRY_ATTEMPTS if retry else 1
+        for attempt in range(attempts):
             try:
                 response = await self._get_following_safe_redirects(
                     url, params=params, headers=request_headers, timeout=timeout
                 )
-                if response.status_code in RETRY_STATUSES and attempt < RETRY_ATTEMPTS - 1:
-                    logger.debug("retryable HTTP %s for %s", response.status_code, url)
-                    await asyncio.sleep(RETRY_BACKOFF * (attempt + 1))
-                    continue
-                response.raise_for_status()
-                if cache:
-                    self._cache_put(key, response)
-                return response
             except httpx.DecodingError as exc:
                 last_error = exc
-                if attempt >= RETRY_ATTEMPTS - 1:
+                if attempt >= attempts - 1:
                     raise
                 # A few upstream CDNs occasionally send a bad Content-Encoding header.
                 # Retry without compression so the body can still be parsed safely.
@@ -122,11 +115,41 @@ class Http:
                 await asyncio.sleep(RETRY_BACKOFF * (attempt + 1))
             except (httpx.TimeoutException, httpx.ConnectError, httpx.RemoteProtocolError) as exc:
                 last_error = exc
-                if attempt >= RETRY_ATTEMPTS - 1:
+                if attempt >= attempts - 1:
                     raise
                 logger.debug("retrying %s after %s", url, type(exc).__name__)
                 await asyncio.sleep(RETRY_BACKOFF * (attempt + 1))
+            else:
+                if await self._handle_response(
+                    response,
+                    url=url,
+                    key=key,
+                    cache=cache,
+                    attempt=attempt,
+                    attempts=attempts,
+                ):
+                    return response
         raise last_error or RuntimeError(f"GET failed: {url}")
+
+    async def _handle_response(
+        self,
+        response: httpx.Response,
+        *,
+        url: str,
+        key: str,
+        cache: bool,
+        attempt: int,
+        attempts: int,
+    ) -> bool:
+        """Return True when the response is final, or False after scheduling a retry."""
+        if response.status_code in RETRY_STATUSES and attempt < attempts - 1:
+            logger.debug("retryable HTTP %s for %s", response.status_code, url)
+            await asyncio.sleep(RETRY_BACKOFF * (attempt + 1))
+            return False
+        response.raise_for_status()
+        if cache:
+            self._cache_put(key, response)
+        return True
 
     async def _get_following_safe_redirects(
         self,

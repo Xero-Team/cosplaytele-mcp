@@ -13,8 +13,9 @@ from cosplaytele_mcp.htmlutil import (
 from cosplaytele_mcp.http import Http
 from cosplaytele_mcp.models import ListingItem, ListingPage, SearchHit, needed_images, window_images
 from cosplaytele_mcp.server import interleave_hits
-from cosplaytele_mcp.sources import SourceError, SourceRegistry, source_allowed_hosts
+from cosplaytele_mcp.sources import SourceError, SourceRegistry, everia, source_allowed_hosts
 from cosplaytele_mcp.sources.baobua import BaoBuaSource
+from cosplaytele_mcp.sources.beauty3600000 import Beauty3600000Source
 from cosplaytele_mcp.sources.buondua import BuonDuaSource
 from cosplaytele_mcp.sources.cosplaytele import CATEGORIES, CosplayTeleSource
 from cosplaytele_mcp.sources.hentaicosplay import HentaiCosplaySource
@@ -724,3 +725,50 @@ async def test_misskon_latest_browses_the_cosplay_tag() -> None:
     assert "tags=353" in posts_call
     assert "categories=" not in posts_call
     assert not any(url.endswith("/tag/cosplay/") for url in seen)
+
+
+@pytest.mark.anyio
+async def test_beauty3600000_listing_ignores_image_bookmark_anchor() -> None:
+    html = """
+    <article id="post-1">
+      <a href="https://3600000.xyz/cosplay-aqua/" rel="bookmark">
+        <img src="https://3600000.xyz/cover.webp">
+      </a>
+      <header class="entry-header">
+        <h2 class="entry-title">
+          <a href="https://3600000.xyz/cosplay-aqua/" rel="bookmark">Cosplay Aqua</a>
+        </h2>
+      </header>
+    </article>
+    """
+    transport = httpx.MockTransport(lambda request: httpx.Response(200, text=html))
+    async with httpx.AsyncClient(transport=transport, base_url="https://3600000.xyz") as client:
+        source = Beauty3600000Source(Http(client))
+        page = await source.popular(1)
+    assert [item.path for item in page.items] == ["/cosplay-aqua/"]
+    assert page.items[0].title == "Cosplay Aqua"
+    assert page.items[0].thumbnail_url == "https://3600000.xyz/cover.webp"
+
+
+@pytest.mark.anyio
+async def test_beauty3600000_search_reports_unsupported() -> None:
+    source = Beauty3600000Source(http=None)  # type: ignore[arg-type]
+    with pytest.raises(SourceError, match="does not support search"):
+        await source.search("aqua", 1, None)
+
+
+@pytest.mark.anyio
+async def test_everia_search_uses_one_long_attempt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: dict[str, object] = {}
+
+    async def fake_fetch(http: Http, url: str, **kwargs: object) -> tuple[list[dict], bool]:
+        calls.update(kwargs)
+        return [], False
+
+    monkeypatch.setattr(everia, "fetch_wp_posts", fake_fetch)
+    source = everia.EveriaSource(http=None)  # type: ignore[arg-type]
+    await source.search("rem", 1, None)
+    assert calls["timeout"] == everia.SEARCH_TIMEOUT
+    assert calls["retry"] is False

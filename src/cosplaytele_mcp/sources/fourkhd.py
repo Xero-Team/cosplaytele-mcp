@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from cosplaytele_mcp.htmlutil import download_urls_from_html, looks_like_video, path_of
-from cosplaytele_mcp.models import Gallery, ListingPage
 from cosplaytele_mcp.sources.base import GallerySource, SourceError
 from cosplaytele_mcp.wordpress import (
     fetch_wp_posts,
@@ -13,6 +14,9 @@ from cosplaytele_mcp.wordpress import (
     wp_terms,
     wp_title,
 )
+
+if TYPE_CHECKING:
+    from cosplaytele_mcp.models import Gallery, ListingPage
 
 THUMB_HOST = "img.4khd.com"
 PAGE_HOST = "img.uuss.uk"
@@ -81,8 +85,7 @@ class FourKHDSource(GallerySource):
     async def gallery(self, path: str, *, offset: int = 0, limit: int | None = None) -> Gallery:
         resolved = self.resolve_path(path)
         slug = resolved.rstrip("/").rsplit("/", 1)[-1]
-        if slug.endswith(".html"):
-            slug = slug[: -len(".html")]
+        slug = slug.removesuffix(".html")
         extra = {
             "rest_route": "/wp/v2/posts",
             "_embed": "1",

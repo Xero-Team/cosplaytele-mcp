@@ -108,7 +108,7 @@ cosplaytele-mcp --transport streamable-http --host 0.0.0.0 --port 8000 \
 | `fourkhd` | https://www.4khd.com | 分类 `popular` | `orderby=date` | WP REST |
 | `kiutaku` | https://kiutaku.com | `/hot` | `/?start=` | `?search=` |
 | `cup2d` | https://cup2d.com | 无 | WP REST | WP REST |
-| `beauty3600000` | https://3600000.xyz | HTML `/category/cosplay/` | 无 | `?s=` |
+| `beauty3600000` | https://3600000.xyz | HTML `/category/cosplay/` | 无 | 无（`?s=` 与 WP REST 均触发 PHP 内存错误） |
 | `foamgirl` | https://foamgirl.net/cosplay | `/cosplay` | 无 | `?s=` |
 | `ososedki` | https://ososedki.com | `/api/albums?type=top` | `/api/albums` | `type=search` |
 | `mitaku` | https://mitaku.net | `/category/ero-cosplay/` | 无 | `?s=` |

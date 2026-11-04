@@ -1,10 +1,8 @@
 from __future__ import annotations
 
 import re
-from typing import ClassVar
+from typing import TYPE_CHECKING, ClassVar
 from urllib.parse import quote
-
-from selectolax.lexbor import LexborHTMLParser as HTMLParser, LexborNode as Node
 
 from cosplaytele_mcp.htmlutil import (
     abs_url,
@@ -18,6 +16,9 @@ from cosplaytele_mcp.htmlutil import (
 from cosplaytele_mcp.http import DEFAULT_HEADERS
 from cosplaytele_mcp.models import Gallery, ListingItem, ListingPage, needed_images
 from cosplaytele_mcp.sources.base import GallerySource, SourceError
+
+if TYPE_CHECKING:
+    from selectolax.lexbor import LexborHTMLParser as HTMLParser, LexborNode as Node
 
 HD_PATH = re.compile(r"(/p=\d+x?\d*/)")
 RANKINGS = {

@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import ClassVar, Literal
+from typing import TYPE_CHECKING, ClassVar, Literal
 from urllib.parse import urljoin
 
 from cosplaytele_mcp.htmlutil import normalize_path
-from cosplaytele_mcp.http import Http
 from cosplaytele_mcp.models import (
     Gallery,
     ImageAsset,
@@ -14,6 +13,9 @@ from cosplaytele_mcp.models import (
     SourceInfo,
     window_images,
 )
+
+if TYPE_CHECKING:
+    from cosplaytele_mcp.http import Http
 
 
 class SourceError(Exception):

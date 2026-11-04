@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import re
 from html import unescape
+from typing import TYPE_CHECKING
 from urllib.parse import urljoin, urlparse, urlsplit
 
-from selectolax.lexbor import LexborNode as Node
+if TYPE_CHECKING:
+    from selectolax.lexbor import LexborNode as Node
 
 SLUG_STRIP_RE = re.compile(r"[^\w\s-]", re.UNICODE)
 SLUG_DASH_RE = re.compile(r"[-\s]+")
@@ -19,10 +21,13 @@ def abs_url(base: str, value: str | None) -> str | None:
     return urljoin(base if base.endswith("/") else f"{base}/", text)
 
 
-def img_src(node: Node | None, base: str) -> str | None:
-    if node is None:
-        return None
-    for attr in (
+def _is_placeholder(value: str) -> bool:
+    lowered = value.lower()
+    return lowered.startswith("data:") or "blank_" in value or "/images-lazyload" in value
+
+
+def _lazy_src(node: Node) -> str | None:
+    for attr_name in (
         "data-original",
         "data-original-src",
         "data-lazy-src",
@@ -30,33 +35,41 @@ def img_src(node: Node | None, base: str) -> str | None:
         "data-mfp-src",
         "file",
     ):
-        value = node.attributes.get(attr)
+        value = node.attributes.get(attr_name)
         if not value:
             continue
         text = value.strip()
-        if text.lower().startswith("data:") or "blank_" in text or "/images-lazyload" in text:
+        if _is_placeholder(text):
             continue
-        return abs_url(base, text)
+        return text
+    return None
+
+
+def _best_srcset(base: str, srcset: str) -> str | None:
+    candidates: list[tuple[int, str]] = []
+    for candidate in srcset.split(","):
+        parts = candidate.strip().split()
+        if not parts:
+            continue
+        width = int(parts[1][:-1]) if len(parts) > 1 and parts[1].endswith("w") else 0
+        candidates.append((width, parts[0]))
+    if not candidates:
+        return None
+    return abs_url(base, max(candidates)[1])
+
+
+def img_src(node: Node | None, base: str) -> str | None:
+    if node is None:
+        return None
+    lazy = _lazy_src(node)
+    if lazy is not None:
+        return abs_url(base, lazy)
     srcset = node.attributes.get("srcset")
     if srcset:
-        candidates: list[tuple[int, str]] = []
-        for candidate in srcset.split(","):
-            parts = candidate.strip().split()
-            if not parts:
-                continue
-            width = int(parts[1][:-1]) if len(parts) > 1 and parts[1].endswith("w") else 0
-            candidates.append((width, parts[0]))
-        if candidates:
-            return abs_url(base, max(candidates)[1])
+        return _best_srcset(base, srcset)
     src = node.attributes.get("src")
-    if src:
-        text = src.strip()
-        if (
-            not text.lower().startswith("data:")
-            and "blank_" not in text
-            and "/images-lazyload" not in text
-        ):
-            return abs_url(base, text)
+    if src and not _is_placeholder(src):
+        return abs_url(base, src.strip())
     return None
 
 
@@ -119,7 +132,7 @@ def looks_like_video(title: str = "", html: str = "") -> bool:
 def download_urls_from_html(html: str) -> list[str]:
     urls: list[str] = []
     seen: set[str] = set()
-    for href in re.findall(r"""href=["'](https?://[^"']+)""", html, re.I):
+    for href in re.findall(r"""href=["'](https?://[^"']+)""", html, re.IGNORECASE):
         host = host_key(href)
         if (
             any(host == item or host.endswith(f".{item}") for item in DOWNLOAD_HOSTS)

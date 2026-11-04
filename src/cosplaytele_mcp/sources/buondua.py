@@ -1,11 +1,13 @@
 from __future__ import annotations
 
-from typing import ClassVar
+from typing import TYPE_CHECKING, ClassVar
 from urllib.parse import quote, urlencode
 
-from cosplaytele_mcp.models import ListingPage
 from cosplaytele_mcp.sources.base import SourceError
 from cosplaytele_mcp.sources.kiutaku import KiutakuSource
+
+if TYPE_CHECKING:
+    from cosplaytele_mcp.models import ListingPage
 
 COSPLAY_TAG = "cosplay-10688"
 

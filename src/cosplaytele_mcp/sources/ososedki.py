@@ -30,7 +30,7 @@ class OsosedkiSource(GallerySource):
     ) -> ListingPage:
         if category:
             return await self._category_albums(category, page, query="")
-        return await self._albums(page, type="top", value="1")
+        return await self._albums(page, kind="top", value="1")
 
     async def latest(self, page: int, category: str | None = None) -> ListingPage:
         if category:
@@ -43,7 +43,7 @@ class OsosedkiSource(GallerySource):
         if category:
             return await self._category_albums(category, page, query=query)
         if query.strip():
-            return await self._albums(page, type="search", value=query.strip())
+            return await self._albums(page, kind="search", value=query.strip())
         return await self.popular(page)
 
     async def by_tag(self, tag: str, page: int, exclude_ai: bool = True) -> ListingPage:
@@ -52,9 +52,9 @@ class OsosedkiSource(GallerySource):
             raise SourceError("tag must not be blank")
         kind, _, value = label.partition(":")
         if kind.lower() in FILTER_TYPES and value.strip():
-            return await self._albums(page, type=kind.lower(), value=value.strip())
+            return await self._albums(page, kind=kind.lower(), value=value.strip())
         for filter_type in ("cosplay", "model", "fandom"):
-            result = await self._albums(page, type=filter_type, value=label)
+            result = await self._albums(page, kind=filter_type, value=label)
             if result.items:
                 return result
         return ListingPage(source=self.id, page=page, has_next_page=False, items=[])
@@ -107,7 +107,7 @@ class OsosedkiSource(GallerySource):
             )
         if not value:
             raise SourceError("OSOSEDKI category search needs a value, e.g. cosplay:Genshin")
-        return await self._albums(page, type=kind, value=value)
+        return await self._albums(page, kind=kind, value=value)
 
     async def _cosplay_directory(self, page: int) -> ListingPage:
         suffix = f"?page={page}" if page > 1 else ""
@@ -135,11 +135,11 @@ class OsosedkiSource(GallerySource):
         return ListingPage(source=self.id, page=page, has_next_page=has_next, items=items)
 
     async def _albums(
-        self, page: int, type: str | None = None, value: str | None = None
+        self, page: int, kind: str | None = None, value: str | None = None
     ) -> ListingPage:
         params: dict[str, str] = {"page": str(page)}
-        if type and value:
-            params["type"] = type
+        if kind and value:
+            params["type"] = kind
             params["value"] = value
         payload = await self.http.get_json(
             f"{self.base_url}/api/albums",

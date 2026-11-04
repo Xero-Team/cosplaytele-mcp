@@ -1,4 +1,5 @@
 import asyncio
+from pathlib import Path
 
 import httpx
 import pytest
@@ -7,10 +8,19 @@ from mcp.server.mcpserver.exceptions import ToolError
 from mcp.shared.exceptions import MCPError
 from mcp.types import ImageContent, PromptReference, ResourceTemplateReference, TextContent
 
+from cosplaytele_mcp import server
 from cosplaytele_mcp.http import Http
 from cosplaytele_mcp.models import Gallery, ImageAsset, ListingItem, ListingPage, SourceId
-from cosplaytele_mcp.server import _image_content, mcp
-from cosplaytele_mcp.sources import SourceError
+from cosplaytele_mcp.server import (
+    SEARCH_CONCURRENCY,
+    SEARCHABLE_SOURCE_COUNT,
+    _image_content,
+    _package_version,
+    main,
+    mcp,
+)
+from cosplaytele_mcp.sources import SOURCE_TYPES, SourceError
+from cosplaytele_mcp.version import __version__
 
 
 class StubSearchSource:
@@ -337,12 +347,24 @@ async def test_search_keeps_completed_results_when_total_budget_expires(
 
 
 @pytest.mark.anyio
+async def test_single_source_search_uses_the_named_source_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry = StubSearchRegistry(
+        [StubSearchSource("cosplaytele", search_page("cosplaytele", "Slow"), delay=1)]
+    )
+    monkeypatch.setattr("cosplaytele_mcp.server.SourceRegistry", lambda http: registry)
+    monkeypatch.setattr("cosplaytele_mcp.server.SINGLE_SOURCE_SEARCH_TIMEOUT", 0.01)
+    async with Client(mcp, raise_exceptions=True) as connected:
+        result = await connected.call_tool("search", {"query": "miku", "source": "cosplaytele"})
+    assert result.is_error is True
+    assert "timed out after 0.01s" in result.content[0].text
+
+
+@pytest.mark.anyio
 async def test_search_all_finishes_every_searchable_source(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from cosplaytele_mcp.server import SEARCH_CONCURRENCY, SEARCHABLE_SOURCE_COUNT
-    from cosplaytele_mcp.sources import SOURCE_TYPES
-
     assert SEARCH_CONCURRENCY >= SEARCHABLE_SOURCE_COUNT
     searchable = [cls.id for cls in SOURCE_TYPES if cls.supports_search]
     assert len(searchable) == SEARCHABLE_SOURCE_COUNT
@@ -434,8 +456,6 @@ async def test_get_gallery_image_window_schema(client: Client) -> None:
 
 
 def test_main_help(capsys: pytest.CaptureFixture[str]) -> None:
-    from cosplaytele_mcp.server import main
-
     with pytest.raises(SystemExit) as exc:
         main(["--help"])
     assert exc.value.code == 0
@@ -445,8 +465,6 @@ def test_main_help(capsys: pytest.CaptureFixture[str]) -> None:
 
 
 def test_main_configures_streamable_http_origin_protection(monkeypatch: pytest.MonkeyPatch) -> None:
-    from cosplaytele_mcp import server
-
     captured: dict[str, object] = {}
     monkeypatch.setattr(server.mcp, "run", lambda **kwargs: captured.update(kwargs))
     server.main(
@@ -469,8 +487,6 @@ def test_main_configures_streamable_http_origin_protection(monkeypatch: pytest.M
 
 
 def test_main_configures_loopback_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
-    from cosplaytele_mcp import server
-
     captured: dict[str, object] = {}
     monkeypatch.setattr(server.mcp, "run", lambda **kwargs: captured.update(kwargs))
     server.main(["--transport", "streamable-http", "--port", "8080"])
@@ -480,27 +496,18 @@ def test_main_configures_loopback_defaults(monkeypatch: pytest.MonkeyPatch) -> N
 
 
 def test_main_rejects_legacy_sse_transport() -> None:
-    from cosplaytele_mcp import server
-
     with pytest.raises(SystemExit) as exc:
         server.main(["--transport", "sse"])
     assert exc.value.code == 2
 
 
 def test_main_requires_remote_allowlists() -> None:
-    from cosplaytele_mcp import server
-
     with pytest.raises(SystemExit) as exc:
         server.main(["--transport", "streamable-http", "--host", "0.0.0.0"])
     assert exc.value.code == 2
 
 
 def test_package_version() -> None:
-    from pathlib import Path
-
-    from cosplaytele_mcp.server import _package_version
-    from cosplaytele_mcp.version import __version__
-
-    assert __version__ == "0.6.0"
+    assert __version__ == "0.6.2"
     assert _package_version() == __version__
     assert f'version = "{__version__}"' in Path("pyproject.toml").read_text()

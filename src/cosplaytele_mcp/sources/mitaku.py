@@ -1,8 +1,7 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
 from urllib.parse import quote, urlencode
-
-from selectolax.lexbor import LexborHTMLParser as HTMLParser
 
 from cosplaytele_mcp.htmlutil import (
     abs_url,
@@ -15,6 +14,9 @@ from cosplaytele_mcp.htmlutil import (
 )
 from cosplaytele_mcp.models import Gallery, ListingItem, ListingPage
 from cosplaytele_mcp.sources.base import GallerySource, SourceError
+
+if TYPE_CHECKING:
+    from selectolax.lexbor import LexborHTMLParser as HTMLParser
 
 CATEGORIES = {
     "ero-cosplay": "ero-cosplay",

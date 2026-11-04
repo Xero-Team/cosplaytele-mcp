@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from cosplaytele_mcp.htmlutil import download_urls_from_html, looks_like_video, text_of
-from cosplaytele_mcp.models import Gallery, ListingPage
 from cosplaytele_mcp.sources.base import GallerySource, SourceError
 from cosplaytele_mcp.wordpress import (
     fetch_wp_posts,
@@ -10,6 +11,9 @@ from cosplaytele_mcp.wordpress import (
     images_from_html,
     listing_from_posts,
 )
+
+if TYPE_CHECKING:
+    from cosplaytele_mcp.models import Gallery, ListingPage
 
 
 class Cup2DSource(GallerySource):

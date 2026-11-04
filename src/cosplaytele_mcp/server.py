@@ -4,7 +4,7 @@ import argparse
 import asyncio
 import base64
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Annotated, Literal, cast
@@ -66,6 +66,9 @@ SEARCHABLE_SOURCE_COUNT = sum(1 for cls in SOURCE_TYPES if cls.supports_search)
 SEARCH_CONCURRENCY = max(6, SEARCHABLE_SOURCE_COUNT)
 SOURCE_SEARCH_TIMEOUT = 35.0
 SEARCH_TOTAL_TIMEOUT = 45.0
+# Everia's WordPress search regularly needs 30-90s. Give an explicitly named
+# source that budget without making every all-source search wait for it.
+SINGLE_SOURCE_SEARCH_TIMEOUT = 90.0
 MAX_IMAGE_CONTENT_BYTES = 20 * 1024 * 1024
 SUPPORTED_IMAGE_MIME_TYPES = frozenset(
     {"image/avif", "image/gif", "image/jpeg", "image/png", "image/webp"}
@@ -178,7 +181,7 @@ mcp.middleware.append(_normalize_prompt_errors)
 
 
 def _registry(ctx: Context[AppContext] | Context) -> SourceRegistry:
-    app_context = cast(AppContext, ctx.request_context.lifespan_context)
+    app_context = cast("AppContext", ctx.request_context.lifespan_context)
     return app_context.sources
 
 
@@ -404,16 +407,19 @@ async def search(
         else [site for site in registry.all() if site.supports_search]
     )
     semaphore = asyncio.Semaphore(SEARCH_CONCURRENCY)
+    single_source = source != "all"
+    per_source_timeout = SINGLE_SOURCE_SEARCH_TIMEOUT if single_source else SOURCE_SEARCH_TIMEOUT
+    total_timeout = SINGLE_SOURCE_SEARCH_TIMEOUT + 5.0 if single_source else SEARCH_TOTAL_TIMEOUT
 
     async def run(site: GallerySource) -> tuple[GallerySource, ListingPage | Exception]:
         try:
             async with semaphore:
                 return site, await asyncio.wait_for(
                     _search_site(site, query, page, category, exclude_ai),
-                    timeout=SOURCE_SEARCH_TIMEOUT,
+                    timeout=per_source_timeout,
                 )
         except TimeoutError:
-            return site, SourceError(f"search timed out after {SOURCE_SEARCH_TIMEOUT:g}s")
+            return site, SourceError(f"search timed out after {per_source_timeout:g}s")
         except Exception as exc:
             return site, exc
 
@@ -424,7 +430,6 @@ async def search(
     successful_sources: list[SourceId] = []
     has_next = False
     finished = 0
-    pending = set(tasks)
 
     async def record(site: GallerySource, outcome: ListingPage | Exception) -> None:
         nonlocal finished, has_next
@@ -445,32 +450,7 @@ async def search(
             for item in apply_ai_filter(result, exclude_ai).items
         ]
 
-    try:
-        deadline = asyncio.get_running_loop().time() + SEARCH_TOTAL_TIMEOUT
-        while pending:
-            remaining = deadline - asyncio.get_running_loop().time()
-            if remaining <= 0:
-                break
-            done, pending = await asyncio.wait(
-                pending, timeout=remaining, return_when=asyncio.FIRST_COMPLETED
-            )
-            if not done:
-                break
-            for task in done:
-                site, outcome = task.result()
-                await record(site, outcome)
-        if pending:
-            for task in pending:
-                task.cancel()
-            await asyncio.gather(*pending, return_exceptions=True)
-            for task in pending:
-                site = task_sites[task]
-                await record(site, SourceError(f"search timed out after {SEARCH_TOTAL_TIMEOUT:g}s"))
-    except BaseException:
-        for task in tasks:
-            task.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
-        raise
+    await _wait_for_search_tasks(tasks, task_sites, total_timeout, record)
     if not successful_sources:
         summary = "; ".join(f"{error.source}: {error.message}" for error in errors)
         raise ToolError(f"All selected sources failed. {summary}")
@@ -483,6 +463,45 @@ async def search(
         successful_sources=successful_sources,
         errors=errors,
     )
+
+
+SearchTask = asyncio.Task[tuple[GallerySource, ListingPage | Exception]]
+
+
+async def _wait_for_search_tasks(
+    tasks: list[SearchTask],
+    task_sites: dict[SearchTask, GallerySource],
+    total_timeout: float,
+    record: Callable[[GallerySource, ListingPage | Exception], Awaitable[None]],
+) -> None:
+    pending = set(tasks)
+    try:
+        deadline = asyncio.get_running_loop().time() + total_timeout
+        while pending:
+            remaining = deadline - asyncio.get_running_loop().time()
+            if remaining <= 0:
+                break
+            done, pending = await asyncio.wait(
+                pending, timeout=remaining, return_when=asyncio.FIRST_COMPLETED
+            )
+            if not done:
+                break
+            for task in done:
+                site, outcome = task.result()
+                await record(site, outcome)
+        if not pending:
+            return
+        for task in pending:
+            task.cancel()
+        await asyncio.gather(*pending, return_exceptions=True)
+        for task in pending:
+            site = task_sites[task]
+            await record(site, SourceError(f"search timed out after {total_timeout:g}s"))
+    except BaseException:
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        raise
 
 
 def _source_failure(source: SourceId, exc: Exception, detail: str) -> SourceFailure:
@@ -686,7 +705,7 @@ async def fetch_image(
             asset = ImageAsset(url=gallery.image_urls[0])
         else:
             raise ToolError(f"Gallery image index {index} was not found")
-        app_context = cast(AppContext, ctx.request_context.lifespan_context)
+        app_context = cast("AppContext", ctx.request_context.lifespan_context)
         return await _image_content(app_context.http, asset)
     except ToolError:
         raise
@@ -708,7 +727,7 @@ async def gallery_resource(source: str, path: str, ctx: Context) -> Gallery:
     try:
         return _flag_gallery(
             await _registry(ctx)
-            .get(cast(SourceId, source))
+            .get(cast("SourceId", source))
             .gallery(path, offset=0, limit=DEFAULT_IMAGE_LIMIT)
         )
     except SourceError as exc:

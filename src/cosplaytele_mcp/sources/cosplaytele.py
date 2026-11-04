@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import re
 from html import unescape
+from typing import TYPE_CHECKING
 from urllib.parse import quote
 
 import httpx
-from selectolax.lexbor import LexborHTMLParser as HTMLParser
 
 from cosplaytele_mcp.ai import looks_like_ai
 from cosplaytele_mcp.htmlutil import (
@@ -20,6 +20,9 @@ from cosplaytele_mcp.htmlutil import (
 )
 from cosplaytele_mcp.models import Gallery, ListingItem, ListingPage
 from cosplaytele_mcp.sources.base import GallerySource, SourceError
+
+if TYPE_CHECKING:
+    from selectolax.lexbor import LexborHTMLParser as HTMLParser
 
 TAG_HREF = re.compile(r"/tag/")
 PAGE_SIZE = 20

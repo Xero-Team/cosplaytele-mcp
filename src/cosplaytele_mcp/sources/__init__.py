@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from cosplaytele_mcp.htmlutil import host_key
-from cosplaytele_mcp.http import Http
-from cosplaytele_mcp.models import SourceId
 from cosplaytele_mcp.sources.baobua import BaoBuaSource
 from cosplaytele_mcp.sources.base import GallerySource, SourceError
 from cosplaytele_mcp.sources.beauty3600000 import Beauty3600000Source
@@ -21,6 +21,10 @@ from cosplaytele_mcp.sources.mitaku import MitakuSource
 from cosplaytele_mcp.sources.ososedki import OsosedkiSource
 from cosplaytele_mcp.sources.simplycosplay import SimplyCosplaySource
 from cosplaytele_mcp.sources.xasiat import XasiatSource
+
+if TYPE_CHECKING:
+    from cosplaytele_mcp.http import Http
+    from cosplaytele_mcp.models import SourceId
 
 SOURCE_TYPES = (
     CosplayTeleSource,

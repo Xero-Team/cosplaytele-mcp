@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import re
+from typing import TYPE_CHECKING
 
-from cosplaytele_mcp.models import Gallery, ListingItem, ListingPage
+if TYPE_CHECKING:
+    from cosplaytele_mcp.models import Gallery, ListingItem, ListingPage
 
 ADULT_LABEL = "(18+)"
 

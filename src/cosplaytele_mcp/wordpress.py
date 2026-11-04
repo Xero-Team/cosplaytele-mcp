@@ -98,7 +98,7 @@ def images_from_html(html: str, base: str) -> list[str]:
         href = abs_url(base, anchor.attributes.get("href"))
         if (
             href
-            and re.search(r"\.(?:jpe?g|png|webp|gif|avif)(?:$|\?)", href, re.I)
+            and re.search(r"\.(?:jpe?g|png|webp|gif|avif)(?:$|\?)", href, re.IGNORECASE)
             and href not in seen
         ):
             seen.add(href)
@@ -141,6 +141,7 @@ async def fetch_wp_posts(
     timeout: float | object | None = USE_CLIENT_TIMEOUT,
     embed: bool = True,
     fields: tuple[str, ...] | None = None,
+    retry: bool = True,
 ) -> tuple[list[dict[str, Any]], bool]:
     params: dict[str, Any] = {
         "page": str(page),
@@ -155,7 +156,9 @@ async def fetch_wp_posts(
         params.update(extra)
     if search and search.strip():
         params["search"] = search.strip()
-    response = await http.get(posts_url, referer=referer, params=params, timeout=timeout)
+    response = await http.get(
+        posts_url, referer=referer, params=params, timeout=timeout, retry=retry
+    )
     payload = response.json()
     if isinstance(payload, dict):
         if payload.get("code"):

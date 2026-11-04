@@ -2,22 +2,26 @@ from __future__ import annotations
 
 import asyncio
 import re
-from typing import Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
 
 import httpx
-from selectolax.lexbor import LexborHTMLParser as HTMLParser
 
 from cosplaytele_mcp.htmlutil import abs_url, attr
-from cosplaytele_mcp.http import Http
 from cosplaytele_mcp.models import Gallery, ListingItem, ListingPage, needed_images
 from cosplaytele_mcp.sources.base import GallerySource, SourceError
 
+if TYPE_CHECKING:
+    from selectolax.lexbor import LexborHTMLParser as HTMLParser
+
+    from cosplaytele_mcp.http import Http
+
 API_BASE = "https://api.simply-porn.com/v2"
 PAGE_SIZE = 20
-FALLBACK_TOKEN = "01730876"
+# Public token embedded in the site's own JavaScript bundle, not a credential.
+FALLBACK_TOKEN = "01730876"  # noqa: S105
 GALLERY_KINDS = frozenset({"gallery", "image"})
 TOKEN_RE = re.compile(r'token\s*:\s*"([^"]+)"')
-MAIN_SCRIPT_RE = re.compile(r"main[^\"']*\.js", re.I)
+MAIN_SCRIPT_RE = re.compile(r"main[^\"']*\.js", re.IGNORECASE)
 
 
 class SimplyCosplaySource(GallerySource):

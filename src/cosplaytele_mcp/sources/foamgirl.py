@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
 from urllib.parse import quote, urlencode
-
-from selectolax.lexbor import LexborHTMLParser as HTMLParser
 
 from cosplaytele_mcp.htmlutil import abs_url, attr, img_src, path_of, slugify, text_of
 from cosplaytele_mcp.models import Gallery, ListingItem, ListingPage, needed_images
 from cosplaytele_mcp.sources.base import GallerySource, SourceError
+
+if TYPE_CHECKING:
+    from selectolax.lexbor import LexborHTMLParser as HTMLParser
 
 
 class FoamGirlSource(GallerySource):

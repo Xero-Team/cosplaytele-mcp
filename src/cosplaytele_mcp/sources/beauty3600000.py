@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from urllib.parse import quote, urlencode
+from urllib.parse import quote
 
 from cosplaytele_mcp.htmlutil import abs_url, attr, img_src, path_of, slugify, text_of
 from cosplaytele_mcp.models import Gallery, ListingItem, ListingPage
@@ -13,6 +13,10 @@ class Beauty3600000Source(GallerySource):
     name = "3600000 Beauty"
     base_url = "https://3600000.xyz"
     supports_latest = False
+    # The site's WordPress search endpoints (?s= and /wp-json/wp/v2/posts?search=)
+    # exhaust PHP memory and return 500/fatal-error pages, so only browsing and
+    # tag archives are usable.
+    supports_search = False
     popular_kind = "archive"
     category_names = ("cosplay",)
 
@@ -25,17 +29,10 @@ class Beauty3600000Source(GallerySource):
     async def search(
         self, query: str, page: int, category: str | None, exclude_ai: bool = True
     ) -> ListingPage:
-        if category and category != "cosplay":
-            raise SourceError(f"Unknown 3600000 Beauty category {category!r}")
-        if not query.strip():
-            return await self.popular(page)
-        path = (
-            f"/category/cosplay/page/{page}/"
-            if category
-            else (f"/page/{page}/" if page > 1 else "/")
+        raise SourceError(
+            f"{self.name} does not support search: the source site returns PHP memory errors "
+            "for search requests. Use sort='popular' or browse_tag() instead."
         )
-        url = f"{self.base_url}{path}?{urlencode({'s': query.strip()})}"
-        return await self._listing(url, page)
 
     async def by_tag(self, tag: str, page: int, exclude_ai: bool = True) -> ListingPage:
         slug = slugify(tag)
@@ -73,7 +70,7 @@ class Beauty3600000Source(GallerySource):
         document = await self.http.get_html(url, referer=f"{self.base_url}/")
         items: list[ListingItem] = []
         for node in document.css("article"):
-            link = node.css_first(".entry-title a, h2 a, a[rel=bookmark]")
+            link = node.css_first(".entry-title a, h2 a") or node.css_first("a[rel=bookmark]")
             href = abs_url(self.base_url, attr(link, "href"))
             title = text_of(link)
             if not href or not title:

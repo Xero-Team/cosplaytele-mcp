@@ -49,6 +49,21 @@ async def test_http_retries_decoding_error_without_compression() -> None:
 
 
 @pytest.mark.anyio
+async def test_http_retry_can_be_disabled() -> None:
+    attempts = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        attempts["n"] += 1
+        return httpx.Response(503, text="busy")
+
+    transport = httpx.MockTransport(handler)
+    async with httpx.AsyncClient(transport=transport, base_url="https://example.com") as client:
+        with pytest.raises(httpx.HTTPStatusError):
+            await Http(client).get("https://example.com/posts", retry=False)
+    assert attempts["n"] == 1
+
+
+@pytest.mark.anyio
 async def test_http_does_not_retry_404() -> None:
     attempts = {"n": 0}
 

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import re
+from typing import TYPE_CHECKING
 
-from cosplaytele_mcp.models import ListingPage
+if TYPE_CHECKING:
+    from cosplaytele_mcp.models import ListingPage
 
 AI_TITLE_RE = re.compile(
     r"(?:^|[\s(\[{「『])(?:ai[\s_-]?art|ai[\s_-]?generated|ai[\s_-]?enhanced|ai生成|ai繪圖|ai绘图)(?:$|[\s)\]}」』:,.!?–-])",
