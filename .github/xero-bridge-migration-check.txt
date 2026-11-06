@@ -1,0 +1,1 @@
+Temporary Forgejo migration PR synchronization check. This file must not be merged.
