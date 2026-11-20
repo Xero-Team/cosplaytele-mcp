@@ -1,3 +1,5 @@
+import json
+
 import httpx
 import pytest
 from selectolax.lexbor import LexborHTMLParser as HTMLParser
@@ -11,7 +13,13 @@ from cosplaytele_mcp.htmlutil import (
     slugify,
 )
 from cosplaytele_mcp.http import Http
-from cosplaytele_mcp.models import ListingItem, ListingPage, SearchHit, needed_images, window_images
+from cosplaytele_mcp.models import (
+    ListingItem,
+    ListingPage,
+    SearchHit,
+    needed_images,
+    window_images,
+)
 from cosplaytele_mcp.server import interleave_hits
 from cosplaytele_mcp.sources import SourceError, SourceRegistry, everia, source_allowed_hosts
 from cosplaytele_mcp.sources.baobua import BaoBuaSource
@@ -24,7 +32,11 @@ from cosplaytele_mcp.sources.kiutaku import KiutakuSource
 from cosplaytele_mcp.sources.lovecutes import LoveCutesSource
 from cosplaytele_mcp.sources.misskon import MissKonSource
 from cosplaytele_mcp.sources.ososedki import OsosedkiSource
-from cosplaytele_mcp.sources.simplycosplay import SimplyCosplaySource, token_from_script
+from cosplaytele_mcp.sources.simplycosplay import (
+    SimplyCosplaySource,
+    _jsonld_gallery,
+    _squash_node,
+)
 from cosplaytele_mcp.sources.xasiat import XasiatSource, looks_like_cosplay
 from cosplaytele_mcp.wordpress import listing_from_posts
 
@@ -326,7 +338,7 @@ def test_registry_by_url() -> None:
     assert registry.by_url("https://www.4khd.com/foo.html").id == "fourkhd"
     assert registry.by_url("https://ja.hentai-cosplay-xxx.com/image/aqua/").id == "hentaicosplay"
     assert registry.by_url("https://www.lovecutes.com/article/32567/").id == "lovecutes"
-    assert registry.by_url("https://www.simply-cosplay.com/gallery/new/eula/").id == "simplycosplay"
+    assert registry.by_url("https://www.simply-cosplay.com/sets/eula-abc123/").id == "simplycosplay"
     assert registry.by_url("https://jjcos.com/post/Eula/").id == "jjcos"
     assert registry.by_url("https://buondua.com/tag/cosplay-10688").id == "buondua"
     assert registry.by_url("https://www.xasiat.com/albums/1/eula/").id == "xasiat"
@@ -335,10 +347,10 @@ def test_registry_by_url() -> None:
         registry.by_url("https://example.com/x")
 
 
-def test_source_allowed_hosts_includes_simply_cosplay_api() -> None:
+def test_source_allowed_hosts_includes_simply_cosplay_cdn() -> None:
     hosts = {host_key(item) for item in source_allowed_hosts()}
     assert "simply-cosplay.com" in hosts
-    assert "api.simply-porn.com" in hosts
+    assert "images.sh-cdn.com" in hosts
 
 
 def test_download_urls_and_video_hints() -> None:
@@ -466,39 +478,84 @@ def test_lovecutes_article_pagination_and_image_window() -> None:
     ]
 
 
-def test_simplycosplay_token_and_listing() -> None:
-    assert token_from_script('foo token:"01730876" bar') == "01730876"
-    assert token_from_script("token: 'abc123'") == "abc123"
+def test_simplycosplay_listing_cards() -> None:
     source = SimplyCosplaySource(http=None)  # type: ignore[arg-type]
-    items = source._listing_items(
-        {
-            "data": [
-                {
-                    "title": "Eula",
-                    "slug": "eula-set",
-                    "type": "Gallery",
-                    "preview": {
-                        "publish_date": "2026-09-01T12:00:00.000",
-                        "urls": {"thumb": {"url": "https://cdn.example/thumb.webp"}},
-                    },
-                }
-            ]
-        }
+    document = HTMLParser(
+        """
+        <div class="grid">
+          <a class="th pu-reader-trigger" href="/sets/albedo-utpas1gm">
+            <div class="im">
+              <img src="https://images.sh-cdn.com/cosplay/73/484-480.webp"
+                   srcset="https://images.sh-cdn.com/cosplay/73/484-480.webp 480w,
+                           https://images.sh-cdn.com/cosplay/73/484-1440.webp 1440w"/>
+              <span class="n"><span class="ms">photo_library</span>8</span>
+            </div>
+            <div class="info">
+              <h3><b>Albedo</b>: <!-- -->Sovereign of the Black Hall</h3>
+              <span class="who"><span class="nm">Mei Sato</span></span>
+              <span class="mt"><span><span class="ms">visibility</span>750</span><span class="d">4d</span></span>
+            </div>
+          </a>
+          <a class="th" href="/personas/mei-sato">Persona link</a>
+        </div>
+        """
     )
-    assert items[0].path == "/gallery/new/eula-set"
-    assert items[0].thumbnail_url == "https://cdn.example/thumb.webp"
-    assert items[0].published_at == "2026-09-01"
-    images = source._gallery_images(
-        {
-            "images": [
-                {"urls": {"url": "https://cdn.example/1.webp"}},
-                {"urls": {"url": "https://cdn.example/2.webp"}},
-            ],
-            "preview": {"urls": {"url": "https://cdn.example/preview.webp"}},
-        }
+    items = source._items(document)
+    assert [item.path for item in items] == ["/sets/albedo-utpas1gm"]
+    assert items[0].title == "Albedo: Sovereign of the Black Hall"
+    assert items[0].url == "https://www.simply-cosplay.com/sets/albedo-utpas1gm"
+    assert items[0].thumbnail_url == "https://images.sh-cdn.com/cosplay/73/484-1440.webp"
+    assert items[0].image_count == 8
+    assert source._sets_url(1, sort="hot") == "https://www.simply-cosplay.com/sets?sort=hot"
+    assert source._sets_url(2) == "https://www.simply-cosplay.com/sets?page=2"
+
+
+def test_simplycosplay_gallery_uses_film_with_jsonld_fallback() -> None:
+    source = SimplyCosplaySource(http=None)  # type: ignore[arg-type]
+    document = HTMLParser(
+        """
+        <script type="application/ld+json">
+        {"@context":"https://schema.org","@type":"ImageGallery",
+         "name":"Sovereign of the Black Hall",
+         "image":["https://images.sh-cdn.com/cosplay/73/484-1440.webp"]}
+        </script>
+        <div class="film">
+          <a class="on" href="?m=1"><img src="https://images.sh-cdn.com/cosplay/73/484-480.webp"
+            srcset="https://images.sh-cdn.com/cosplay/73/484-480.webp 480w,
+                    https://images.sh-cdn.com/cosplay/73/484-1440.webp 1440w"/></a>
+          <a class="f" href="?m=2"><img src="https://images.sh-cdn.com/cosplay/73/485-480.webp"
+            srcset="https://images.sh-cdn.com/cosplay/73/485-480.webp 480w,
+                    https://images.sh-cdn.com/cosplay/73/485-1440.webp 1440w"/></a>
+        </div>
+        <h1><span>Albedo</span> · Sovereign of the Black Hall</h1>
+        <div class="wtags" data-testid="set-tags">
+          <a class="k" href="/tags/cosplay">cosplay</a>
+          <a class="k" href="/tags/horns">horns</a>
+        </div>
+        """
     )
-    assert images == ["https://cdn.example/1.webp", "https://cdn.example/2.webp"]
-    assert source._kind_and_slug("/gallery/new/eula-set") == ("gallery", "eula-set")
+    assert source._gallery_images(document, {}) == [
+        "https://images.sh-cdn.com/cosplay/73/484-1440.webp",
+        "https://images.sh-cdn.com/cosplay/73/485-1440.webp",
+    ]
+    assert source._tags(document) == ["cosplay", "horns"]
+    assert _squash_node(document.css_first("h1")) == "Albedo · Sovereign of the Black Hall"
+    assert _jsonld_gallery(document)["name"] == "Sovereign of the Black Hall"
+
+    without_film = HTMLParser(
+        """
+        <script type="application/ld+json">
+        {"@type":"ImageGallery","name":"Set",
+         "image":["https://images.sh-cdn.com/cosplay/1/1-1440.webp",
+                  "https://images.sh-cdn.com/cosplay/1/2-1440.webp"]}
+        </script>
+        """
+    )
+    jsonld = _jsonld_gallery(without_film)
+    assert source._gallery_images(without_film, jsonld) == [
+        "https://images.sh-cdn.com/cosplay/1/1-1440.webp",
+        "https://images.sh-cdn.com/cosplay/1/2-1440.webp",
+    ]
 
 
 def test_jjcos_listing_and_gallery_images() -> None:
@@ -614,14 +671,17 @@ def test_buondua_defaults_to_the_cosplay_tag() -> None:
     assert source._tag_url("cosplay-10688", 2) == "https://buondua.com/tag/cosplay-10688?start=20"
 
 
-def test_simplycosplay_rejects_unknown_gallery_kinds() -> None:
+def test_simplycosplay_rejects_non_set_paths_and_categories() -> None:
     source = SimplyCosplaySource(http=None)  # type: ignore[arg-type]
-    items = source._listing_items({"data": [{"title": "leak", "slug": "secret", "type": "user"}]})
-    assert items == []
-    with pytest.raises(SourceError, match="not a gallery"):
-        source._kind_and_slug("/user/secret")
-    with pytest.raises(SourceError, match="not a gallery"):
-        source._kind_and_slug("/v2/admin/token")
+    assert source.category_names == ()
+    assert source._set_path("/sets/albedo-utpas1gm") == "/sets/albedo-utpas1gm"
+    assert source._set_path("/sets/albedo-utpas1gm?m=2") == "/sets/albedo-utpas1gm?m=2"
+    with pytest.raises(SourceError, match="not a set"):
+        source._set_path("/personas/mei-sato")
+    with pytest.raises(SourceError, match="not a set"):
+        source._set_path("/sets")
+    with pytest.raises(SourceError, match="no category listings"):
+        source._reject_category("gallery")
 
 
 def test_jjcos_index_requires_posts_and_matches_tags() -> None:
@@ -772,3 +832,4 @@ async def test_everia_search_uses_one_long_attempt(
     await source.search("rem", 1, None)
     assert calls["timeout"] == everia.SEARCH_TIMEOUT
     assert calls["retry"] is False
+

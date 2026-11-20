@@ -1,273 +1,191 @@
 from __future__ import annotations
 
-import asyncio
+import json
 import re
+from html import unescape
 from typing import TYPE_CHECKING, Any, ClassVar
+from urllib.parse import quote, urlencode, urlsplit
 
-import httpx
-
-from cosplaytele_mcp.htmlutil import abs_url, attr
-from cosplaytele_mcp.models import Gallery, ListingItem, ListingPage, needed_images
+from cosplaytele_mcp.ai import looks_like_ai
+from cosplaytele_mcp.htmlutil import abs_url, attr, img_src, path_of, slugify, text_of
+from cosplaytele_mcp.models import Gallery, ListingItem, ListingPage
 from cosplaytele_mcp.sources.base import GallerySource, SourceError
 
 if TYPE_CHECKING:
-    from selectolax.lexbor import LexborHTMLParser as HTMLParser
+    from selectolax.lexbor import LexborHTMLParser as HTMLParser, LexborNode as Node
 
-    from cosplaytele_mcp.http import Http
-
-API_BASE = "https://api.simply-porn.com/v2"
-PAGE_SIZE = 20
-# Public token embedded in the site's own JavaScript bundle, not a credential.
-FALLBACK_TOKEN = "01730876"  # noqa: S105
-GALLERY_KINDS = frozenset({"gallery", "image"})
-TOKEN_RE = re.compile(r'token\s*:\s*"([^"]+)"')
-MAIN_SCRIPT_RE = re.compile(r"main[^\"']*\.js", re.IGNORECASE)
+SET_PREFIX = "/sets/"
+COUNT_RE = re.compile(r"\d+")
+WHITESPACE_RE = re.compile(r"\s+")
 
 
 class SimplyCosplaySource(GallerySource):
     id = "simplycosplay"
     name = "Simply Cosplay"
     base_url = "https://www.simply-cosplay.com"
-    extra_hosts = ("https://api.simply-porn.com",)
-    category_names = ("gallery", "image")
+    extra_hosts = ("https://images.sh-cdn.com",)
     image_request_headers: ClassVar[dict[str, str]] = {"Referer": f"{base_url}/"}
-
-    def __init__(self, http: Http) -> None:
-        super().__init__(http)
-        self._token = FALLBACK_TOKEN
-        self._token_lock = asyncio.Lock()
 
     async def popular(
         self, page: int, category: str | None = None, period: str | None = None
     ) -> ListingPage:
-        return await self._browse(page, sort="hot", category=category)
+        self._reject_category(category)
+        return await self._listing(self._sets_url(page, sort="hot"), page)
 
     async def latest(self, page: int, category: str | None = None) -> ListingPage:
-        return await self._browse(page, sort="new", category=category)
+        self._reject_category(category)
+        return await self._listing(self._sets_url(page), page)
 
     async def search(
         self, query: str, page: int, category: str | None, exclude_ai: bool = True
     ) -> ListingPage:
-        if not query.strip():
-            return await self.latest(page, category)
-        params: dict[str, Any] = {
-            "sort": "new",
-            "limit": str(PAGE_SIZE),
-            "page": str(page),
-            "query": query.strip(),
-        }
-        kind = self._category_kind(category)
-        if kind:
-            params["filter[type][0]"] = kind
-        payload = await self._api_get("search", params)
-        items = self._listing_items(payload)
-        return ListingPage(
-            source=self.id,
-            page=page,
-            has_next_page=len(items) >= PAGE_SIZE,
-            items=items,
-        )
+        self._reject_category(category)
+        text = query.strip()
+        if not text:
+            return await self.latest(page)
+        params = {"q": text, "type": "set"}
+        if page > 1:
+            params["page"] = str(page)
+        return await self._listing(f"{self.base_url}/search?{urlencode(params)}", page)
+
+    async def by_tag(self, tag: str, page: int, exclude_ai: bool = True) -> ListingPage:
+        slug = slugify(tag)
+        if not slug:
+            raise SourceError("tag must not be blank")
+        if page > 1:
+            # Tag pages list every set at once and answer ?page=2 with a 404.
+            return ListingPage(source=self.id, page=page, has_next_page=False, items=[])
+        url = f"{self.base_url}/tags/{quote(slug, safe='-')}"
+        return await self._listing(url, page)
 
     async def gallery(self, path: str, *, offset: int = 0, limit: int | None = None) -> Gallery:
-        resolved = self.resolve_path(path)
-        kind, slug = self._kind_and_slug(resolved)
-        payload = await self._api_get(f"{kind}/{slug}", {})
-        data = _unwrap(payload)
-        if not isinstance(data, dict):
-            raise SourceError(f"Simply Cosplay gallery payload is not an object: {resolved}")
-        title = str(data.get("title") or slug).strip() or slug
-        tags = [
-            str(tag.get("name") or "").strip()
-            for tag in data.get("tags") or []
-            if isinstance(tag, dict) and str(tag.get("name") or "").strip()
-        ]
-        published = _preview_date(data.get("preview"))
-        total = data.get("image_count")
-        total_int = int(total) if isinstance(total, int) else None
-        budget = needed_images(offset, limit)
-        if budget == 0:
-            return self.make_gallery(
-                title=title,
-                path=resolved,
-                url=self.absolute(resolved),
-                images=[],
-                offset=offset,
-                limit=limit,
-                complete=False,
-                total=total_int,
-                has_more=True,
-                thumbnail_url=_thumb(data.get("preview")),
-                tags=tags,
-                published_at=published,
-            )
-        images = self._gallery_images(data)
+        resolved = self._set_path(self.resolve_path(path))
+        url = self.absolute(resolved)
+        document = await self.http.get_html(url, referer=f"{self.base_url}/")
+        jsonld = _jsonld_gallery(document)
+        title = _squash_node(document.css_first("h1")) or str(jsonld.get("name") or "").strip()
+        if not title:
+            raise SourceError(f"Simply Cosplay set title missing: {url}")
+        tags = self._tags(document)
+        images = self._gallery_images(document, jsonld)
         if not images:
-            raise SourceError(f"Simply Cosplay gallery has no images: {resolved}")
+            raise SourceError(f"Simply Cosplay set has no images: {url}")
         return self.make_gallery(
             title=title,
             path=resolved,
-            url=self.absolute(resolved),
+            url=url,
             images=images,
             offset=offset,
             limit=limit,
-            total=total_int,
-            thumbnail_url=_thumb(data.get("preview")) or images[0],
             tags=tags,
-            published_at=published,
+            is_ai=looks_like_ai(title=title, path=resolved, tags=tags),
         )
 
-    async def _browse(self, page: int, *, sort: str, category: str | None) -> ListingPage:
-        kind = self._category_kind(category) or "gallery"
-        payload = await self._api_get(
-            kind,
-            {"sort": sort, "limit": str(PAGE_SIZE), "page": str(page)},
-        )
-        items = self._listing_items(payload)
+    def _sets_url(self, page: int, sort: str | None = None) -> str:
+        params: dict[str, str] = {}
+        if sort:
+            params["sort"] = sort
+        if page > 1:
+            params["page"] = str(page)
+        query = f"?{urlencode(params)}" if params else ""
+        return f"{self.base_url}/sets{query}"
+
+    def _set_path(self, resolved: str) -> str:
+        path = urlsplit(resolved).path.rstrip("/")
+        slug = path.removeprefix(SET_PREFIX)
+        if slug == path or not slug or "/" in slug:
+            raise SourceError(f"Simply Cosplay path is not a set: {resolved}")
+        return resolved
+
+    def _reject_category(self, category: str | None) -> None:
+        if category and category.strip():
+            raise SourceError(
+                "Simply Cosplay has no category listings; browse tags with browse_tag instead"
+            )
+
+    async def _listing(self, url: str, page: int) -> ListingPage:
+        document = await self.http.get_html(url, referer=f"{self.base_url}/")
         return ListingPage(
             source=self.id,
             page=page,
-            has_next_page=len(items) >= PAGE_SIZE,
-            items=items,
+            has_next_page=document.css_first('link[rel="next"]') is not None,
+            items=self._items(document),
         )
 
-    async def _api_get(self, path: str, params: dict[str, Any]) -> Any:
-        query = dict(params)
-        query["token"] = self._token
-        url = f"{API_BASE}/{path.strip('/')}"
-        try:
-            return await self.http.get_json(url, referer=f"{self.base_url}/", params=query)
-        except httpx.HTTPStatusError as exc:
-            if exc.response.status_code != 403:
-                raise
-            async with self._token_lock:
-                if query["token"] != self._token:
-                    query["token"] = self._token
-                    return await self.http.get_json(url, referer=f"{self.base_url}/", params=query)
-                self._token = await self._fetch_token()
-                query["token"] = self._token
-                return await self.http.get_json(url, referer=f"{self.base_url}/", params=query)
-
-    async def _fetch_token(self) -> str:
-        document = await self.http.get_html(self.base_url, referer=f"{self.base_url}/", cache=False)
-        script = _main_script_src(document, self.base_url)
-        if not script:
-            raise SourceError("Simply Cosplay token script was not found")
-        response = await self.http.get(script, referer=f"{self.base_url}/", cache=False)
-        token = token_from_script(response.text)
-        if not token:
-            raise SourceError("Simply Cosplay token was not found in the main script")
-        return token
-
-    def _listing_items(self, payload: Any) -> list[ListingItem]:
-        data = _unwrap(payload)
-        if not isinstance(data, list):
-            return []
+    def _items(self, document: HTMLParser) -> list[ListingItem]:
         items: list[ListingItem] = []
-        for raw in data:
-            if not isinstance(raw, dict):
+        seen: set[str] = set()
+        for card in document.css(f'a.th[href^="{SET_PREFIX}"]'):
+            href = abs_url(self.base_url, attr(card, "href"))
+            if not href:
                 continue
-            slug = str(raw.get("slug") or "").strip()
-            kind = str(raw.get("type") or "gallery").strip().lower() or "gallery"
-            title = str(raw.get("title") or slug).strip()
-            if kind not in GALLERY_KINDS or not slug or not title:
+            path = path_of(href)
+            if path in seen:
                 continue
-            path = f"/{kind}/new/{slug}"
+            seen.add(path)
+            title = _card_title(card) or path
             items.append(
                 ListingItem(
                     title=title,
                     path=path,
-                    url=self.absolute(path),
-                    thumbnail_url=_thumb(raw.get("preview")),
-                    published_at=_preview_date(raw.get("preview")),
+                    url=href,
+                    thumbnail_url=img_src(card.css_first(".im img, img"), self.base_url),
+                    image_count=_card_count(card),
+                    is_ai=looks_like_ai(title=title, path=path),
                 )
             )
         return items
 
-    def _gallery_images(self, data: dict[str, Any]) -> list[str]:
-        images: list[str] = []
+    def _tags(self, document: HTMLParser) -> list[str]:
+        labels = (text_of(node) for node in document.css('[data-testid="set-tags"] a'))
+        return [label for label in dict.fromkeys(labels) if label]
+
+    def _gallery_images(self, document: HTMLParser, jsonld: dict[str, Any]) -> list[str]:
+        urls: list[str] = []
         seen: set[str] = set()
-        for raw in data.get("images") or []:
-            if not isinstance(raw, dict):
-                continue
-            url = _full(raw)
-            if url and url not in seen:
-                seen.add(url)
-                images.append(url)
-        if images:
-            return images
-        preview = _full(data.get("preview"))
-        return [preview] if preview else []
-
-    def _kind_and_slug(self, path: str) -> tuple[str, str]:
-        parts = [part for part in path.strip("/").split("/") if part]
-        if len(parts) >= 3 and parts[1] == "new":
-            kind, slug = parts[0].lower(), parts[2]
-        elif len(parts) >= 2:
-            kind, slug = parts[0].lower(), parts[1]
-        else:
-            raise SourceError(f"Simply Cosplay path is not a gallery: {path}")
-        if kind not in GALLERY_KINDS or not slug:
-            raise SourceError(f"Simply Cosplay path is not a gallery: {path}")
-        return kind, slug
-
-    def _category_kind(self, category: str | None) -> str | None:
-        if not category:
-            return None
-        kind = category.strip().lower()
-        if kind not in GALLERY_KINDS:
-            raise SourceError(f"Unknown Simply Cosplay category {category!r}")
-        return kind
+        for img in document.css(".film a img"):
+            src = img_src(img, self.base_url)
+            if src and src not in seen:
+                seen.add(src)
+                urls.append(src)
+        if urls:
+            return urls
+        for raw in jsonld.get("image") or []:
+            if isinstance(raw, str) and raw.strip() and raw.strip() not in seen:
+                seen.add(raw.strip())
+                urls.append(raw.strip())
+        return urls
 
 
-def token_from_script(script: str) -> str | None:
-    match = TOKEN_RE.search(script.replace("'", '"'))
-    return match.group(1) if match else None
+def _squash(value: str) -> str:
+    """Collapse the whitespace JSX leaves around inline elements."""
+    return WHITESPACE_RE.sub(" ", unescape(value)).strip()
 
 
-def _main_script_src(document: HTMLParser, base: str) -> str | None:
-    for node in document.css("script[src]"):
-        src = attr(node, "src") or ""
-        if MAIN_SCRIPT_RE.search(src):
-            return abs_url(base, src)
-    return None
+def _squash_node(node: Node | None) -> str:
+    # strip=True drops the space JSX puts between an inline element and the
+    # text that follows it, so normalize the raw text instead.
+    return _squash(node.text()) if node is not None else ""
 
 
-def _unwrap(payload: Any) -> Any:
-    if isinstance(payload, dict) and "data" in payload:
-        return payload["data"]
-    return payload
+def _card_title(card: Node) -> str:
+    return _squash_node(card.css_first("h3"))
 
 
-def _preview_urls(preview: Any) -> dict[str, Any]:
-    if not isinstance(preview, dict):
-        return {}
-    urls = preview.get("urls")
-    return urls if isinstance(urls, dict) else {}
-
-
-def _thumb(preview: Any) -> str | None:
-    urls = _preview_urls(preview)
-    thumb = urls.get("thumb")
-    if isinstance(thumb, dict):
-        url = thumb.get("url")
-        if isinstance(url, str) and url.strip():
-            return url.strip()
-    full = urls.get("url")
-    return full.strip() if isinstance(full, str) and full.strip() else None
-
-
-def _full(preview: Any) -> str | None:
-    urls = _preview_urls(preview)
-    full = urls.get("url")
-    if isinstance(full, str) and full.strip():
-        return full.strip()
-    return _thumb(preview)
-
-
-def _preview_date(preview: Any) -> str | None:
-    if not isinstance(preview, dict):
+def _card_count(card: Node) -> int | None:
+    node = card.css_first(".n")
+    if node is None:
         return None
-    value = preview.get("publish_date")
-    if not isinstance(value, str) or not value.strip():
-        return None
-    return value.strip()[:10]
+    match = COUNT_RE.search(node.text())
+    return int(match.group()) if match else None
+
+
+def _jsonld_gallery(document: HTMLParser) -> dict[str, Any]:
+    for node in document.css('script[type="application/ld+json"]'):
+        try:
+            data = json.loads(node.text())
+        except ValueError:
+            continue
+        if isinstance(data, dict) and data.get("@type") == "ImageGallery":
+            return data
+    return {}

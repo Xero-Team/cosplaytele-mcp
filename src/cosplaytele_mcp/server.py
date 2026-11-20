@@ -110,8 +110,8 @@ Typical flow:
    limit=0 returns metadata only.
 5. Use fetch_image(source, path, index) only when a client cannot make the
    source-required request itself and the image is hosted on the source
-   allowlist. Off-site CDNs (WordPress, Blogger, Simply Cosplay) must be
-   fetched with image_assets. It returns one image as MCP ImageContent.
+   allowlist. Off-site CDNs (WordPress, Blogger) must be fetched with
+   image_assets. It returns one image as MCP ImageContent.
 
 Notes:
 - exclude_ai defaults to true; get_gallery still returns AI sets, flagged is_ai.
