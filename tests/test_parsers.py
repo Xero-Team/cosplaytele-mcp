@@ -933,6 +933,53 @@ async def test_everia_search_uses_one_long_attempt(
     assert calls["retry"] is False
 
 
+@pytest.mark.anyio
+async def test_misskon_gallery_uses_rest_content_without_banners() -> None:
+    """The themed HTML pages inject a 'Go to page 1' banner; REST is clean."""
+    content = (
+        "<img src='https://kul.misskon.com/a.webp'>"
+        "<img src='https://kul.misskon.com/b.webp'>"
+        "<img src='https://misskon.com/media/2024/06/dlp1.gif'>"
+    )
+    post = {
+        "slug": "123-eula",
+        "title": {"rendered": "Coser@Eula 40 photos"},
+        "link": "https://misskon.com/123-eula/",
+        "date": "2026-11-06T00:00:00",
+        "content": {"rendered": content},
+        "_embedded": {"wp:term": [[{"name": "Cosplay"}]]},
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert "/wp-json/wp/v2/posts" in str(request.url)
+        assert "slug=123-eula" in str(request.url)
+        return httpx.Response(200, json=[post])
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        gallery = await MissKonSource(Http(client)).gallery("/123-eula/", limit=20)
+    assert gallery.image_count == 2
+    assert gallery.image_urls == [
+        "https://kul.misskon.com/a.webp",
+        "https://kul.misskon.com/b.webp",
+    ]
+    assert not any("dlp1.gif" in url for url in gallery.image_urls)
+    assert gallery.tags == ["Cosplay"]
+    assert gallery.published_at == "2026-11-06"
+
+
+def test_misskon_page_images_filters_banner() -> None:
+    source = MissKonSource(http=None)  # type: ignore[arg-type]
+    document = HTMLParser(
+        """
+        <div class="entry">
+          <img class="aligncenter" data-src="https://kul.misskon.com/a.webp">
+          <img class="aligncenter" src="https://misskon.com/media/2024/06/dlp1.gif">
+        </div>
+        """
+    )
+    assert source._page_images(document) == ["https://kul.misskon.com/a.webp"]
+
+
 def test_cosplaytele_gallery_collects_video_assets() -> None:
     source = CosplayTeleSource(http=None)  # type: ignore[arg-type]
     document = HTMLParser(GALLERY_HTML)

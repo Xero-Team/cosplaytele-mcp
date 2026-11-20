@@ -3,18 +3,41 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 from urllib.parse import quote
 
-from cosplaytele_mcp.htmlutil import abs_url, attr, img_src, path_of, slugify, text_of
-from cosplaytele_mcp.models import Gallery, ListingItem, ListingPage, needed_images
+from cosplaytele_mcp.htmlutil import (
+    abs_url,
+    attr,
+    download_urls_from_html,
+    img_src,
+    looks_like_video,
+    path_of,
+    slugify,
+    text_of,
+)
+from cosplaytele_mcp.models import Gallery, ListingItem, ListingPage
 from cosplaytele_mcp.sources.base import GallerySource, SourceError
 from cosplaytele_mcp.wordpress import (
     fetch_wp_posts,
     fetch_wp_tag_id,
     fetch_wp_term_id,
+    images_from_html,
     listing_from_posts,
+    wp_content_html,
+    wp_date,
+    wp_terms,
+    wp_title,
 )
 
 if TYPE_CHECKING:
     from selectolax.lexbor import LexborHTMLParser as HTMLParser
+
+# Rendering a paginated post injects non-photo assets (a "Go to page 1" download
+# banner, logos, lazy-load blanks). Keep them out of image_urls.
+BANNER_MARKERS = ("/media/", "/logo", "dlp", "blank_", "data:")
+
+
+def _is_banner(url: str) -> bool:
+    lowered = url.lower()
+    return any(marker in lowered for marker in BANNER_MARKERS)
 
 
 class MissKonSource(GallerySource):
@@ -83,58 +106,39 @@ class MissKonSource(GallerySource):
     async def gallery(self, path: str, *, offset: int = 0, limit: int | None = None) -> Gallery:
         resolved = self.resolve_path(path)
         url = self.absolute(resolved)
-        first = await self.http.get_html(url, referer=f"{self.base_url}/")
-        title = text_of(first.css_first(".post-title, h1"))
-        if not title:
-            raise SourceError(f"MissKon title missing: {url}")
-        tags = [text_of(node) for node in first.css(".post-tag > a") if text_of(node)]
-        budget = needed_images(offset, limit)
-        if budget == 0:
-            return self.make_gallery(
-                title=title,
-                path=resolved,
-                url=url,
-                images=[],
-                offset=offset,
-                limit=limit,
-                complete=False,
-                has_more=True,
-                tags=tags,
+        slug = resolved.rstrip("/").rsplit("/", 1)[-1]
+        posts, _ = await fetch_wp_posts(
+            self.http,
+            f"{self.base_url}/wp-json/wp/v2/posts",
+            page=1,
+            referer=f"{self.base_url}/",
+            extra={"slug": slug, "per_page": "1", "page": "1"},
+        )
+        # content.rendered carries the whole gallery in order and without the
+        # pagination banners that only appear in the themed HTML pages.
+        post = next((entry for entry in posts if entry.get("slug") == slug), None)
+        if post is None:
+            raise SourceError(f"MissKon post not found: {url}")
+        content = wp_content_html(post)
+        title = wp_title(post)
+        images = list(
+            dict.fromkeys(
+                image for image in images_from_html(content, self.base_url) if not _is_banner(image)
             )
-        max_page = 1
-        numbers = first.css("div.page-link a.post-page-numbers")
-        if numbers:
-            last = text_of(numbers[-1])
-            if last.isdigit():
-                max_page = int(last)
-        images: list[str] = []
-        stopped = False
-        for page in range(1, max_page + 1):
-            if budget is not None and len(images) >= budget:
-                stopped = True
-                break
-            document = (
-                first
-                if page == 1
-                else await self.http.get_html(
-                    f"{url.rstrip('/')}/{page}",
-                    referer=url,
-                )
-            )
-            images.extend(self._page_images(document))
-        images = list(dict.fromkeys(images))
+        )
         if not images:
             raise SourceError(f"MissKon gallery has no images: {url}")
         return self.make_gallery(
             title=title,
             path=resolved,
-            url=url,
+            url=str(post.get("link") or url),
             images=images,
             offset=offset,
             limit=limit,
-            complete=not stopped,
-            has_more=stopped,
-            tags=tags,
+            tags=wp_terms(post),
+            published_at=wp_date(post),
+            has_video=looks_like_video(title=title, html=content),
+            download_urls=download_urls_from_html(content),
         )
 
     async def _exclude_ai(self, extra: dict[str, str]) -> None:
@@ -206,8 +210,10 @@ class MissKonSource(GallerySource):
 
     def _page_images(self, document: HTMLParser) -> list[str]:
         urls: list[str] = []
-        for img in document.css("div.entry img.aligncenter, div.entry img"):
+        seen: set[str] = set()
+        for img in document.css("div.entry img"):
             src = img_src(img, self.base_url)
-            if src and "/logo" not in src:
+            if src and not _is_banner(src) and src not in seen:
+                seen.add(src)
                 urls.append(src)
         return urls
