@@ -17,6 +17,7 @@ from cosplaytele_mcp.models import (
     ListingItem,
     ListingPage,
     SearchHit,
+    VideoAsset,
     needed_images,
     window_images,
 )
@@ -38,6 +39,7 @@ from cosplaytele_mcp.sources.simplycosplay import (
     _squash_node,
 )
 from cosplaytele_mcp.sources.xasiat import XasiatSource, looks_like_cosplay
+from cosplaytele_mcp.video import cossora_embed_urls
 from cosplaytele_mcp.wordpress import listing_from_posts
 
 GALLERY_HTML = """
@@ -833,3 +835,25 @@ async def test_everia_search_uses_one_long_attempt(
     assert calls["timeout"] == everia.SEARCH_TIMEOUT
     assert calls["retry"] is False
 
+
+def test_cosplaytele_gallery_collects_video_assets() -> None:
+    source = CosplayTeleSource(http=None)  # type: ignore[arg-type]
+    document = HTMLParser(GALLERY_HTML)
+    html = document.html or ""
+    assert cossora_embed_urls(html) == [
+        "https://cossora.stream/embed/c52eff92-b996-4c30-9f54-1c7ddf5b3a57"
+    ]
+    gallery = source.make_gallery(
+        title="Kisaki",
+        path="/kisaki/",
+        url="https://cosplaytele.com/kisaki/",
+        images=["https://cosplaytele.com/a.webp"],
+        has_video=True,
+        video_assets=[
+            VideoAsset(
+                url="https://cossora.stream/embed/c52eff92-b996-4c30-9f54-1c7ddf5b3a57",
+                headers={"Referer": "https://cosplaytele.com/kisaki/"},
+            )
+        ],
+    )
+    assert gallery.video_assets[0].headers["Referer"] == "https://cosplaytele.com/kisaki/"

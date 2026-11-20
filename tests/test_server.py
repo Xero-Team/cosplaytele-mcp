@@ -126,6 +126,7 @@ async def test_list_tools_and_resources(client: Client) -> None:
         "browse_tag",
         "related",
         "fetch_image",
+        "download_video",
     } <= tool_names
     by_name = {tool.name: tool for tool in tools.tools}
     assert by_name["list_sources"].annotations is not None

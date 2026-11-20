@@ -11,6 +11,7 @@ dependencies = [
     "httpx>=0.28",
     "pydantic>=2",
     "selectolax>=1.0",
+    "cryptography>=44",
 ]
 
 [project.urls]

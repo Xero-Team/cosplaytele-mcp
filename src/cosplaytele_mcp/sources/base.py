@@ -11,6 +11,7 @@ from cosplaytele_mcp.models import (
     ListingPage,
     SourceId,
     SourceInfo,
+    VideoAsset,
     window_images,
 )
 
@@ -80,6 +81,7 @@ class GallerySource(ABC):
         has_video: bool = False,
         download_urls: list[str] | None = None,
         image_headers: dict[str, str] | None = None,
+        video_assets: list[VideoAsset] | None = None,
     ) -> Gallery:
         sliced, count, off, more = window_images(
             images,
@@ -108,6 +110,7 @@ class GallerySource(ABC):
                 ImageAsset(url=image, headers=dict(image_headers or self.image_request_headers))
                 for image in sliced
             ],
+            video_assets=list(video_assets or []),
         )
 
     @abstractmethod

@@ -18,8 +18,9 @@ from cosplaytele_mcp.htmlutil import (
     slugify,
     text_of,
 )
-from cosplaytele_mcp.models import Gallery, ListingItem, ListingPage
+from cosplaytele_mcp.models import Gallery, ListingItem, ListingPage, VideoAsset
 from cosplaytele_mcp.sources.base import GallerySource, SourceError
+from cosplaytele_mcp.video import cossora_embed_urls
 
 if TYPE_CHECKING:
     from selectolax.lexbor import LexborHTMLParser as HTMLParser
@@ -130,6 +131,7 @@ class CosplayTeleSource(GallerySource):
         if not images:
             raise SourceError(f"CosplayTele gallery has no images: {url}")
         html = document.html or ""
+        embed_urls = cossora_embed_urls(html)
         return self.make_gallery(
             title=title,
             path=resolved,
@@ -140,8 +142,9 @@ class CosplayTeleSource(GallerySource):
             tags=tags,
             published_at=published.split("T", 1)[0] if published else None,
             is_ai=looks_like_ai(title=title, path=resolved, tags=tags),
-            has_video=looks_like_video(title=title, html=html),
+            has_video=looks_like_video(title=title, html=html) or bool(embed_urls),
             download_urls=download_urls_from_html(html),
+            video_assets=[VideoAsset(url=embed, headers={"Referer": url}) for embed in embed_urls],
         )
 
     async def _listing(self, url: str, page: int) -> ListingPage:

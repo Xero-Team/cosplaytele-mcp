@@ -106,6 +106,14 @@ class ImageAsset(BaseModel):
     )
 
 
+class VideoAsset(BaseModel):
+    url: str = Field(description="Embed URL of the video player, e.g. cossora.stream/embed/<uuid>.")
+    headers: dict[str, str] = Field(
+        default_factory=dict,
+        description="HTTP headers required when opening the embed URL, such as Referer.",
+    )
+
+
 class Gallery(BaseModel):
     source: SourceId
     title: str
@@ -132,6 +140,10 @@ class Gallery(BaseModel):
     image_assets: list[ImageAsset] = Field(
         default_factory=list,
         description="Image URLs with any source-required HTTP request headers.",
+    )
+    video_assets: list[VideoAsset] = Field(
+        default_factory=list,
+        description="Video player embed URLs for this gallery, when the post has video.",
     )
 
 

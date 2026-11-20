@@ -28,6 +28,15 @@ class OutboundUrlError(httpx.RequestError):
     """A request attempted to leave the configured source-site allowlist."""
 
 
+class AssetTooLargeError(Exception):
+    """A streamed binary asset exceeded the caller's byte budget."""
+
+    def __init__(self, size: int, limit: int) -> None:
+        super().__init__(f"asset is {size} bytes; limit is {limit} bytes")
+        self.size = size
+        self.limit = limit
+
+
 def describe_error(exc: BaseException) -> str:
     parts: list[str] = [type(exc).__name__]
     text = str(exc).strip()
@@ -195,6 +204,87 @@ class Http:
             host == allowed or host.endswith(f".{allowed}") for allowed in self._allowed_hosts
         ):
             raise OutboundUrlError(f"Host {host!r} is not an allowed source site", request=None)
+
+    async def get_binary(
+        self,
+        url: str,
+        *,
+        max_bytes: int,
+        referer: str | None = None,
+        params: dict[str, Any] | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> tuple[bytes, str]:
+        """Stream a binary asset, enforcing a hard byte cap before buffering it.
+
+        Returns (content, content_type). Unlike get(), the body is never cached
+        and never read past max_bytes; the connection is closed as soon as the
+        cap is exceeded. Raises AssetTooLargeError rather than returning oversized data.
+        """
+        request_headers = dict(headers or {})
+        if referer:
+            request_headers.setdefault("Referer", referer)
+        last_error: BaseException | None = None
+        for attempt in range(RETRY_ATTEMPTS):
+            try:
+                return await self._stream_binary(url, params, request_headers, max_bytes)
+            except AssetTooLargeError:
+                raise
+            except httpx.HTTPStatusError as exc:
+                if exc.response.status_code not in RETRY_STATUSES or attempt >= RETRY_ATTEMPTS - 1:
+                    raise
+                last_error = exc
+                await asyncio.sleep(RETRY_BACKOFF * (attempt + 1))
+            except (httpx.TimeoutException, httpx.ConnectError, httpx.RemoteProtocolError) as exc:
+                last_error = exc
+                if attempt >= RETRY_ATTEMPTS - 1:
+                    raise
+                await asyncio.sleep(RETRY_BACKOFF * (attempt + 1))
+        raise last_error or RuntimeError(f"GET failed: {url}")
+
+    async def _stream_binary(
+        self,
+        url: str,
+        params: dict[str, Any] | None,
+        headers: dict[str, str],
+        max_bytes: int,
+    ) -> tuple[bytes, str]:
+        current_url = url
+        for redirect_count in range(MAX_REDIRECTS + 1):
+            self._validate_url(current_url)
+            request = self.client.build_request(
+                "GET",
+                current_url,
+                params=params if redirect_count == 0 else None,
+                headers=headers,
+            )
+            response = await self.client.send(request, stream=True, follow_redirects=False)
+            if response.is_redirect:
+                location = response.headers.get("location")
+                next_url = urljoin(str(response.url), location) if location else None
+                await response.aclose()
+                if next_url is None:
+                    return b"", response.headers.get("content-type", "")
+                if redirect_count == MAX_REDIRECTS:
+                    raise httpx.TooManyRedirects("Exceeded redirect limit", request=request)
+                current_url = next_url
+                continue
+            try:
+                response.raise_for_status()
+                content_type = response.headers.get("content-type", "")
+                declared = response.headers.get("content-length")
+                if declared and declared.isdigit() and int(declared) > max_bytes:
+                    raise AssetTooLargeError(int(declared), max_bytes)
+                chunks: list[bytes] = []
+                total = 0
+                async for chunk in response.aiter_bytes():
+                    total += len(chunk)
+                    if total > max_bytes:
+                        raise AssetTooLargeError(total, max_bytes)
+                    chunks.append(chunk)
+                return b"".join(chunks), content_type
+            finally:
+                await response.aclose()
+        raise AssertionError("unreachable")
 
     async def get_html(
         self,
