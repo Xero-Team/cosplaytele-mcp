@@ -33,6 +33,7 @@ from cosplaytele_mcp.sources.coswives import (
     flight_document,
     json_array_after,
 )
+from cosplaytele_mcp.sources.fourkhd import _rewrite_cdn
 from cosplaytele_mcp.sources.hentaicosplay import HentaiCosplaySource
 from cosplaytele_mcp.sources.jjcos import JJCOSSource, posts_from_index
 from cosplaytele_mcp.sources.kiutaku import KiutakuSource
@@ -978,6 +979,17 @@ def test_misskon_page_images_filters_banner() -> None:
         """
     )
     assert source._page_images(document) == ["https://kul.misskon.com/a.webp"]
+
+
+def test_fourkhd_rewrite_keeps_fullsize_photon_and_allowlists_it() -> None:
+    original = (
+        "https://i0.wp.com/pic.4khd.com/-v5tqFe4Qt9A/avAUhSU1iFl/AAAAAAADJlA/"
+        "wKnQg7UBBxUhVE6of9tV1CbH8Ew0uNVmQCNcBGAsYHQ/w1300-rw/x.webp?w=1300"
+    )
+    assert _rewrite_cdn(original, thumbnail=False) == original
+    assert _rewrite_cdn(original, thumbnail=True).startswith("https://img.4khd.com/")
+    hosts = {host_key(item) for item in source_allowed_hosts()}
+    assert "i0.wp.com" in hosts
 
 
 def test_cosplaytele_gallery_collects_video_assets() -> None:

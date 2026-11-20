@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, ClassVar
 
 from cosplaytele_mcp.htmlutil import download_urls_from_html, looks_like_video, path_of
 from cosplaytele_mcp.sources.base import GallerySource, SourceError
@@ -18,16 +18,20 @@ from cosplaytele_mcp.wordpress import (
 if TYPE_CHECKING:
     from cosplaytele_mcp.models import Gallery, ListingPage
 
+# img.uuss.uk (the former full-size host) 404s for every image now. The
+# canonical full-size Photon URLs in post content are the original
+# i0.wp.com/pic.4khd.com/... URLs, which return 200 directly with no redirect.
+# img.4khd.com is kept for thumbnails (it 302s to i0.wp.com, display-only).
 THUMB_HOST = "img.4khd.com"
-PAGE_HOST = "img.uuss.uk"
 
 
 def _rewrite_cdn(url: str, thumbnail: bool) -> str:
     if "wp.com" not in url or "pic.4khd.com/" not in url:
         return url
+    if not thumbnail:
+        return url
     mapped = url.split("pic.4khd.com/", 1)[1]
-    host = THUMB_HOST if thumbnail else PAGE_HOST
-    return f"https://{host}/{mapped}"
+    return f"https://{THUMB_HOST}/{mapped}"
 
 
 class FourKHDSource(GallerySource):
@@ -35,6 +39,9 @@ class FourKHDSource(GallerySource):
     name = "4KHD"
     base_url = "https://www.4khd.com"
     popular_kind = "archive"
+    # Full-size images are served directly by Jetpack Photon (no redirect).
+    # img.4khd.com thumbnails 302 here too; allow it so fetch_image works.
+    extra_hosts: ClassVar[tuple[str, ...]] = ("https://i0.wp.com",)
 
     def _api(self) -> str:
         return f"{self.base_url}/index.php"
