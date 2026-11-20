@@ -510,6 +510,6 @@ def test_main_requires_remote_allowlists() -> None:
 
 
 def test_package_version() -> None:
-    assert __version__ == "0.6.2"
+    assert __version__ == "0.7.0"
     assert _package_version() == __version__
     assert f'version = "{__version__}"' in Path("pyproject.toml").read_text()
