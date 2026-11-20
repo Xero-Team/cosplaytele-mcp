@@ -110,6 +110,7 @@ async def test_list_sources(client: Client) -> None:
         "buondua",
         "xasiat",
         "baobua",
+        "coswives",
     }
 
 
@@ -435,7 +436,7 @@ async def test_source_completions(client: Client) -> None:
         ref=PromptReference(type="ref/prompt", name="find_gallery"),
         argument={"name": "source", "value": "cos"},
     )
-    assert prompt.completion.values == ["cosplaytele"]
+    assert prompt.completion.values == ["cosplaytele", "coswives"]
     resource = await client.complete(
         ref=ResourceTemplateReference(type="ref/resource", uri="gallery://{source}/{+path}"),
         argument={"name": "source", "value": "foam"},

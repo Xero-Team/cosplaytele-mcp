@@ -8,6 +8,7 @@ from cosplaytele_mcp.sources.base import GallerySource, SourceError
 from cosplaytele_mcp.sources.beauty3600000 import Beauty3600000Source
 from cosplaytele_mcp.sources.buondua import BuonDuaSource
 from cosplaytele_mcp.sources.cosplaytele import CosplayTeleSource
+from cosplaytele_mcp.sources.coswives import CosWivesSource
 from cosplaytele_mcp.sources.cup2d import Cup2DSource
 from cosplaytele_mcp.sources.everia import EveriaSource
 from cosplaytele_mcp.sources.foamgirl import FoamGirlSource
@@ -44,6 +45,7 @@ SOURCE_TYPES = (
     BuonDuaSource,
     XasiatSource,
     BaoBuaSource,
+    CosWivesSource,
 )
 
 HOST_TO_SOURCE = {host_key(cls.base_url): cls.id for cls in SOURCE_TYPES}

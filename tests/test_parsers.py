@@ -27,6 +27,12 @@ from cosplaytele_mcp.sources.baobua import BaoBuaSource
 from cosplaytele_mcp.sources.beauty3600000 import Beauty3600000Source
 from cosplaytele_mcp.sources.buondua import BuonDuaSource
 from cosplaytele_mcp.sources.cosplaytele import CATEGORIES, CosplayTeleSource
+from cosplaytele_mcp.sources.coswives import (
+    CosWivesSource,
+    first_object_with_key,
+    flight_document,
+    json_array_after,
+)
 from cosplaytele_mcp.sources.hentaicosplay import HentaiCosplaySource
 from cosplaytele_mcp.sources.jjcos import JJCOSSource, posts_from_index
 from cosplaytele_mcp.sources.kiutaku import KiutakuSource
@@ -345,6 +351,7 @@ def test_registry_by_url() -> None:
     assert registry.by_url("https://buondua.com/tag/cosplay-10688").id == "buondua"
     assert registry.by_url("https://www.xasiat.com/albums/1/eula/").id == "xasiat"
     assert registry.by_url("https://baobua.net/spot/abc.html").id == "baobua"
+    assert registry.by_url("https://coswives.com/post/kaneko-eclipse-brown-dust-2").id == "coswives"
     with pytest.raises(SourceError, match="No source for host"):
         registry.by_url("https://example.com/x")
 
@@ -353,6 +360,7 @@ def test_source_allowed_hosts_includes_simply_cosplay_cdn() -> None:
     hosts = {host_key(item) for item in source_allowed_hosts()}
     assert "simply-cosplay.com" in hosts
     assert "images.sh-cdn.com" in hosts
+    assert "coswives-cdn.b-cdn.net" in hosts
 
 
 def test_download_urls_and_video_hints() -> None:
@@ -751,6 +759,95 @@ def test_buondua_parses_listing_and_gallery_html() -> None:
         "https://buondua.com/1.webp",
         "https://buondua.com/2.webp",
     ]
+
+
+def _coswives_page(*chunks: str) -> str:
+    return "".join(
+        f"<script>self.__next_f.push([1,{json.dumps(chunk)}])</script>" for chunk in chunks
+    )
+
+
+def test_coswives_flight_document_and_json_arrays() -> None:
+    html = _coswives_page(
+        '1:{"posts":[{"slug":"eula","title":"Eula"},',
+        '{"slug":"kisaki","title":"Kisaki"}],"totalPages":9}',
+    )
+    flight = flight_document(html)
+    assert json_array_after(flight, "posts") == [
+        {"slug": "eula", "title": "Eula"},
+        {"slug": "kisaki", "title": "Kisaki"},
+    ]
+    assert flight.count('"totalPages":9') == 1
+    assert first_object_with_key(flight, "slug") == {"slug": "eula", "title": "Eula"}
+    assert json_array_after(flight, "missing") == []
+
+
+def test_coswives_listing_item_from_post() -> None:
+    source = CosWivesSource(http=None)  # type: ignore[arg-type]
+    item = source._listing_item(
+        {
+            "slug": "kaneko-eclipse-brown-dust-2",
+            "title": "Kaneko - Eclipse Brown Dust 2",
+            "tags": ["Cosplay", "Game"],
+            "thumbnail_url": "https://coswives-cdn.b-cdn.net/cover.webp?width=450&quality=80",
+            "created_at": "2026-11-08T14:19:10.030Z",
+            "download_desc": "48 photos\n*40 MB*\nPassword: *COSWIVES*",
+            "is_full_video": False,
+        }
+    )
+    assert item is not None
+    assert item.path == "/post/kaneko-eclipse-brown-dust-2"
+    assert item.url == "https://coswives.com/post/kaneko-eclipse-brown-dust-2"
+    assert item.published_at == "2026-11-08"
+    assert item.image_count == 48
+    assert item.has_video is False
+    assert item.tags == ["Cosplay", "Game"]
+    assert item.thumbnail_url.startswith("https://coswives-cdn.b-cdn.net/")
+
+
+@pytest.mark.anyio
+async def test_coswives_gallery_uses_fullsize_images_and_referer() -> None:
+    flight = (
+        '45:{"post":{"slug":"eula","title":"Eula Cosplay","tags":["Cosplay"],'
+        '"is_full_video":false,"video_preview_url":null},"imagesArray":'
+        '["https://coswives-cdn.b-cdn.net/collections/eula/webp/001.webp",'
+        '"https://coswives-cdn.b-cdn.net/collections/eula/webp/002.webp"],'
+        '"links":[{"url":"https://coswives.site/abc"}]}'
+    )
+    html = (
+        "<html><body><h1>Eula Cosplay</h1>"
+        '<a href="/?tag=Cosplay">Cosplay</a>'
+        '<a href="/?tag=Game">Game</a>' + _coswives_page(flight) + "</body></html>"
+    )
+    transport = httpx.MockTransport(lambda request: httpx.Response(200, text=html))
+    async with httpx.AsyncClient(transport=transport) as client:
+        source = CosWivesSource(Http(client))
+        gallery = await source.gallery("/post/eula", limit=1)
+    assert gallery.title == "Eula Cosplay"
+    assert gallery.tags == ["Cosplay", "Game"]
+    assert gallery.image_count == 2
+    assert gallery.image_urls == ["https://coswives-cdn.b-cdn.net/collections/eula/webp/001.webp"]
+    assert gallery.has_more_images is True
+    assert gallery.image_assets[0].headers == {"Referer": "https://coswives.com/"}
+    assert gallery.download_urls == ["https://coswives.site/abc"]
+
+
+@pytest.mark.anyio
+async def test_coswives_popular_is_a_single_ranking_page() -> None:
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(str(request.url))
+        return httpx.Response(200, text=_coswives_page('1:{"popularPosts":[]}'))
+
+    transport = httpx.MockTransport(handler)
+    async with httpx.AsyncClient(transport=transport) as client:
+        source = CosWivesSource(Http(client))
+        first = await source.popular(1)
+        second = await source.popular(2)
+    assert first.items == []
+    assert second.items == []
+    assert seen == ["https://coswives.com/popular"]
 
 
 @pytest.fixture

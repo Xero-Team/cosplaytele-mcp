@@ -22,6 +22,7 @@ SourceId = Literal[
     "buondua",
     "xasiat",
     "baobua",
+    "coswives",
 ]
 
 BrowseSort = Literal["popular", "latest"]
