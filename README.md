@@ -20,6 +20,8 @@ pip install cosplaytele-mcp
 
 装完后命令是 `cosplaytele-mcp`。
 
+视频下载依赖 `cryptography`（已在依赖中）；`download_video` 用 `ffmpeg` 把 HLS 分片转封装成 MP4，系统需安装 `ffmpeg`（`brew install ffmpeg`），未安装时保留 `.ts`。
+
 ## 接入宿主
 
 推荐用 `uvx`，不必克隆仓库。若宿主找不到 `uvx`，把 `command` 换成 `uvx` 的绝对路径（常见是 `~/.local/bin/uvx`）。
@@ -113,11 +115,12 @@ cosplaytele-mcp --transport streamable-http --host 0.0.0.0 --port 8000 \
 | `ososedki` | https://ososedki.com | `/api/albums?type=top` | `/api/albums` | `type=search` |
 | `mitaku` | https://mitaku.net | `/category/ero-cosplay/` | 无 | `?s=` |
 | `lovecutes` | https://www.lovecutes.com/type/6/ | Cosplay 分类（`type/6`） | 无 | 全站搜索后仅保留 Cosplay 分类 |
-| `simplycosplay` | https://www.simply-cosplay.com | API `sort=hot` | API `sort=new` | `api.simply-porn.com/v2/search` |
+| `simplycosplay` | https://www.simply-cosplay.com | `/sets?sort=hot` | `/sets?page=N` | `/search?q=&type=set` |
 | `jjcos` | https://jjcos.com/tag/HSQ2151O0wZ/ | Cosplay 标签归档 | 无 | `/api/index.html` 标题过滤 |
 | `buondua` | https://buondua.com/tag/cosplay-10688 | Cosplay 标签归档 | 无 | `?search=` |
 | `xasiat` | https://www.xasiat.com/albums/categories/cosplay/ | `sort_by=album_viewed_week` | `sort_by=post_date` | `/search/search/` |
 | `baobua` | https://baobua.net/category/Cosplay | Cosplay 分类归档 | 无 | 全站 `?s=` |
+| `coswives` | https://coswives.com | `/popular` 按 `view_count` 排行（固定 24 条，无分页） | `/?page=N` 归档 | `/?q=` |
 
 ## 工具
 
@@ -127,12 +130,13 @@ cosplaytele-mcp --transport streamable-http --host 0.0.0.0 --port 8000 \
 - `browse(source, sort=popular|latest, page=1, query?, category?, period?, exclude_ai=true)`：排行 / 最新；只带 `category` 时按该分类列出，不走关键词搜索；带 `query` 时走该源搜索。`period` 仅部分源的热门有效：CosplayTele 为 `last24hours|last7days|last30days|all`，Hentai Cosplay 为 `day|week|month|year`。CosplayTele 的 WordPress 排行 REST 接口当前整站 500，源改为抓站内 HTML；所有 `period` 都回落到同一个「Popular Cosplay」精选组件，不再区分时间窗
 - `browse_tag(source, tag, page=1, exclude_ai=true)`：按标签列出
 - `related(source, path, page=1, exclude_ai=true)`：相近套图。CosplayTele 走 Contextual Related Posts；其余源用图集第一个标签
-- `get_gallery(source, path, offset=0, limit=20)`：详情和图片 URL。默认只回前 20 张加 `image_count`；`limit=0` 只回元数据。`path` 用列表或搜索结果里的 `path`，也接受完整帖子 URL。`image_assets` 为每个 `image_urls` 条目附带源站要求的请求头；可能带 `download_urls`、`has_video`（有视频时只打标，不返回可播放流）
-- `fetch_image(source, path, index)`：按需取图集中的一张，按 `image_assets` 的请求头请求源站，并返回 MCP `ImageContent`。只拉取源站 allowlist 上的 URL；JJCOS（`i1.wp.com`）、BaoBua（`blogger.googleusercontent.com`）、Simply Cosplay 独立 CDN 会被拒绝，请改用 `image_assets` 自行请求。不写本地文件，不下载整套图集；单图上限 20 MiB，较大的原图同样用 `image_assets`。
+- `get_gallery(source, path, offset=0, limit=20)`：详情和图片 URL。默认只回前 20 张加 `image_count`；`limit=0` 只回元数据。`path` 用列表或搜索结果里的 `path`，也接受完整帖子 URL。`image_assets` 为每个 `image_urls` 条目附带源站要求的请求头；可能带 `download_urls`、`has_video`、`video_assets`（CosplayTele 的 cossora.stream 播放器地址）
+- `fetch_image(source, path, index)`：按需取图集中的一张，按 `image_assets` 的请求头请求源站，并返回 MCP `ImageContent`。只拉取源站 allowlist 上的 URL；CosWives 的 `coswives-cdn.b-cdn.net`、4KHD 的 `i0.wp.com`、Simply Cosplay 的 `images.sh-cdn.com` 已加入 allowlist，配合 `Referer` 可直接取图；JJCOS（`i1.wp.com`）、BaoBua（`blogger.googleusercontent.com`）会被拒绝，请改用 `image_assets` 自行请求。不写本地文件，不下载整套图集；单图上限 20 MiB，超限在缓冲前拒绝，较大的原图同样用 `image_assets`。
+- `download_video(source, path, index=0, output_dir?)`：下载图集中的视频到本地文件（默认当前目录）。仅 CosplayTele 的 cossora.stream 播放器有效：服务端解密其 AES-256-CBC 加密的 HLS `index.m3u8`，流式拼接 `.ts` 分片，并用 `ffmpeg` 转封装为 MP4（未安装 ffmpeg 时保留 `.ts`）。只返回本地文件路径、大小、mime 和分片数，不返回视频二进制；`output_dir` 可指定输出目录。
 
 列表项在源站提供时带 `tags`、`published_at`、`image_count`、`has_video`。没有的字段为 `null` / 空列表，不会为凑字段再打详情。年龄语义容易被误判的制服主题词（如 `JK`、`校服`、`制服`、`school girl`、`school uniform`、`after school`）会在标题和标签中追加 `(18+)`；路径、搜索词和源站原始标识不变。
 
-CosplayTele 的 `category` 除表内 slug 外，也接受模特/作品分类 slug（如 `byoru`）。Hentai Cosplay 热门 `category` 为排行种类：`like`、`bookmark`、`download`、`tag`、`keyword`、`images`。OSOSEDKI `category=cosplays` 列出角色目录，再把名字交给 `browse_tag`。
+CosplayTele 的 `category` 除表内 slug 外，也接受模特/作品分类 slug（如 `byoru`）。Hentai Cosplay 热门 `category` 为排行种类：`like`、`bookmark`、`download`、`tag`、`keyword`、`images`。OSOSEDKI `category=cosplays` 列出角色目录，再把名字交给 `browse_tag`。Simply Cosplay 改版后没有分类页，带 `category` 会直接报错，请改用 `browse_tag`。
 
 `exclude_ai` 默认开启。只认明确 AI 标记，避免误伤 `Ai Yamada`、`Ai Hoshino` 这类名字：
 
@@ -161,13 +165,16 @@ CosplayTele 的 `category` 除表内 slug 外，也接受模特/作品分类 slu
 | FoamGirl | `/?s=`，默认浏览 `/cosplay` |
 | OSOSEDKI | `/api/albums?type=search` |
 | Mitaku | `/?s=` |
-| Simply Cosplay | `api.simply-porn.com/v2/search?query=` |
+| Simply Cosplay | `/search?q=&type=set`（全站搜索按名称匹配，再只看 set 结果） |
 | JJCOS | `/api/index.html` 缓存后按标题/链接/标签过滤 Cosplay；默认浏览 Cosplay 标签 |
 | Buon Dua | `?search=`；默认浏览 `/tag/cosplay-10688` |
 | Xasiat | `/search/search/` XHR block；`category=cosplay` 时按标题/路径过滤；默认浏览 Cosplay 相册分类 |
 | BaoBua | 全站 `/?s=`（无法锁到 Cosplay 分类）；默认浏览 `/category/Cosplay` |
+| CosWives | `/?q=`；分类 `/?category=Sinful|Lewd|Innocent`；标签 `/?tag=<标签>`；列表与详情数据来自 Next.js RSC flight 内嵌 JSON |
 
 资源：`sources://catalog`、`gallery://{source}/{+path}`。提示词：`find_gallery`。
+
+源适配修复：MissKon 详情改走 WP REST `content.rendered`，不再翻 `<!--nextpage-->` 分页（分页页会混入「Go to page 1」横幅并重复图片，导致 `image_count`/索引错乱）；4KHD 全尺寸图恢复为原始 `i0.wp.com/pic.4khd.com` URL（`img.uuss.uk` 已失效、404 且不在 allowlist），并加入 allowlist，`fetch_image` 可直接取图；Xasiat 单图常超 20 MiB，取图改为流式读并在缓冲前按上限拒绝，避免整张大图进内存；Simply Cosplay 站点已改版为 Next.js 服务端渲染，旧 API（`api.simply-porn.com`，域名已无 A 记录）与 `/gallery/new/<slug>`、`/image/<slug>` 路径全部失效，源改为抓 HTML：列表走 `/sets`（热门 `?sort=hot`）、搜索走 `/search?q=&type=set`、标签走 `/tags/<slug>`（单页，`?page=2` 返回 404）、详情走 `/sets/<slug>`（`.film` 胶片条取全尺寸图，JSON-LD `ImageGallery` 兜底），图片 CDN 变为 `images.sh-cdn.com` 并加入 allowlist。
 
 ## 开发
 
